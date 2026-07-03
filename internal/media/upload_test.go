@@ -58,6 +58,20 @@ func TestChunkedUploadWithResume(t *testing.T) {
 	}
 	patch(t, c, fmt.Sprintf("%s/api/admin/media/%d/blob?offset=%d", ts.URL, m.ID, sz.Size), []byte("world"))
 
+	// test subtitle endpoint
+	r, _ = c.Post(fmt.Sprintf("%s/api/admin/media/%d/subtitle", ts.URL, m.ID), "text/plain",
+		bytes.NewReader([]byte("1\n00:00:00,000 --> 00:00:05,000\nHello\n")))
+	if r.StatusCode != 201 {
+		t.Fatalf("subtitle POST: want 201 got %d", r.StatusCode)
+	}
+	var sub struct{ ID int }
+	if err := json.NewDecoder(r.Body).Decode(&sub); err != nil {
+		t.Fatalf("subtitle response decode: %v", err)
+	}
+	if sub.ID != 0 {
+		t.Fatalf("subtitle id: want 0 got %d", sub.ID)
+	}
+
 	r, _ = c.Post(fmt.Sprintf("%s/api/admin/media/%d/finish", ts.URL, m.ID), "", nil)
 	if r.StatusCode != 202 {
 		t.Fatalf("finish: %d", r.StatusCode)

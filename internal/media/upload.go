@@ -70,6 +70,7 @@ func UploadRoutes(mux *http.ServeMux, d *sql.DB, dataDir string) {
 			return
 		}
 		defer f.Close()
+		// ponytail: Stat-then-Write is not atomic; single admin uploads sequentially, add per-id lock if uploads ever go concurrent
 		if fi, _ := f.Stat(); fi.Size() != offset {
 			http.Error(w, fmt.Sprintf("offset mismatch, have %d", fi.Size()), 409)
 			return
@@ -104,6 +105,7 @@ func UploadRoutes(mux *http.ServeMux, d *sql.DB, dataDir string) {
 			return
 		}
 		w.WriteHeader(201)
+		json.NewEncoder(w).Encode(map[string]int{"id": len(subs)})
 	}))
 
 	mux.HandleFunc("POST /api/admin/media/{id}/finish", adm(func(w http.ResponseWriter, r *http.Request) {
