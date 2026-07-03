@@ -68,3 +68,15 @@ func TestVersionMonotonic(t *testing.T) {
 		}
 	}
 }
+
+func TestClockGoingBackwardDoesNotRewind(t *testing.T) {
+	s := NewWatch(1, 1000)
+	s, _ = s.Apply("play", 0, 1000)
+	if got := s.PositionAt(500); got != 0 { // clock stepped back
+		t.Fatalf("PositionAt must clamp, got %v", got)
+	}
+	s, _ = s.Apply("pause", 0, 500) // pause with regressed clock
+	if s.Position < 0 {
+		t.Fatalf("Position went negative: %v", s.Position)
+	}
+}

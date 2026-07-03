@@ -18,7 +18,7 @@ func NewWatch(mediaID int64, nowMs int64) WatchState {
 
 // PositionAt projects the playhead to nowMs using the server-authoritative state.
 func (s WatchState) PositionAt(nowMs int64) float64 {
-	if s.Paused {
+	if s.Paused || nowMs < s.UpdatedAt { // ponytail: clamp beats negative time; wall clock can step backward under NTP
 		return s.Position
 	}
 	return s.Position + float64(nowMs-s.UpdatedAt)/1000*s.Rate
@@ -42,6 +42,8 @@ func (s WatchState) Apply(action string, pos float64, nowMs int64) (WatchState, 
 		return s, fmt.Errorf("unknown action %q", action)
 	}
 	s.Version++
-	s.UpdatedAt = nowMs
+	if nowMs > s.UpdatedAt { // ponytail: UpdatedAt is basis for elapsed; never go backward
+		s.UpdatedAt = nowMs
+	}
 	return s, nil
 }
