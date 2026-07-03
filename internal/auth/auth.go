@@ -74,8 +74,16 @@ func UserByToken(d *sql.DB, tok string) (User, error) {
 func DeleteSession(d *sql.DB, tok string) { d.Exec(`DELETE FROM sessions WHERE token=?`, tok) }
 
 // Register consumes a single-use invite code. Role is always member.
+// The claim and insert happen in one transaction so a failed registration
+// (e.g. username taken) rolls back and leaves the invite code unused.
 func Register(d *sql.DB, code, user, pass string) (User, error) {
-	res, err := d.Exec(`UPDATE invite_codes SET used_by=-1 WHERE code=? AND used_by IS NULL`, code)
+	tx, err := d.Begin()
+	if err != nil {
+		return User{}, err
+	}
+	defer tx.Rollback()
+
+	res, err := tx.Exec(`UPDATE invite_codes SET used_by=-1 WHERE code=? AND used_by IS NULL`, code)
 	if err != nil {
 		return User{}, err
 	}
@@ -83,11 +91,16 @@ func Register(d *sql.DB, code, user, pass string) (User, error) {
 		return User{}, errors.New("invalid or used invite code")
 	}
 	h, s := Hash(pass)
-	r, err := d.Exec(`INSERT INTO users (username, pass_hash, salt) VALUES (?,?,?)`, user, h, s)
+	r, err := tx.Exec(`INSERT INTO users (username, pass_hash, salt) VALUES (?,?,?)`, user, h, s)
 	if err != nil {
 		return User{}, errors.New("username taken")
 	}
 	id, _ := r.LastInsertId()
-	d.Exec(`UPDATE invite_codes SET used_by=? WHERE code=?`, id, code)
+	if _, err := tx.Exec(`UPDATE invite_codes SET used_by=? WHERE code=?`, id, code); err != nil {
+		return User{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return User{}, err
+	}
 	return User{ID: id, Username: user, Role: "member"}, nil
 }
