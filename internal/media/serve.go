@@ -91,6 +91,11 @@ func ServeRoutes(mux *http.ServeMux, d *sql.DB) {
 	mux.HandleFunc("GET /media/{id}/subs/{sid}", auth.Require(d, false, func(w http.ResponseWriter, r *http.Request) {
 		sid, _ := strconv.ParseInt(r.PathValue("sid"), 10, 64)
 		mid, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		// Gate on parent media readiness
+		if _, ok := mediaPath(d, mid); !ok {
+			http.Error(w, "not found", 404)
+			return
+		}
 		var fp string
 		if d.QueryRow(`SELECT file_path FROM subtitles WHERE id=? AND media_id=?`, sid, mid).Scan(&fp) != nil {
 			http.Error(w, "not found", 404)
