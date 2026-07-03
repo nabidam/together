@@ -3,6 +3,7 @@ module together
 go 1.26.4
 
 require (
+	github.com/coder/websocket v1.8.15
 	golang.org/x/crypto v0.53.0
 	modernc.org/sqlite v1.53.0
 )
