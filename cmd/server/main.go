@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"embed"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"together/internal/api"
@@ -15,6 +18,23 @@ import (
 	"together/internal/live"
 	"together/internal/media"
 )
+
+//go:embed all:webdist
+var webFS embed.FS
+
+func spa(mux *http.ServeMux) {
+	sub, err := fs.Sub(webFS, "webdist")
+	if err != nil {
+		log.Fatal(err)
+	}
+	fileServer := http.FileServerFS(sub)
+	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+		if _, err := fs.Stat(sub, strings.TrimPrefix(r.URL.Path, "/")); err != nil && r.URL.Path != "/" {
+			r.URL.Path = "/" // SPA fallback (hash routing: only "/" really needed)
+		}
+		fileServer.ServeHTTP(w, r)
+	})
+}
 
 func env(key, def string) string {
 	if v := os.Getenv(key); v != "" {
@@ -51,6 +71,7 @@ func main() {
 	media.ServeRoutes(mux, d)
 	mux.HandleFunc("GET /ws/{id}", auth.Require(d, false, hub.Handle))
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })
+	spa(mux)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
