@@ -129,6 +129,7 @@ func process(d *sql.DB, dataDir string, mediaID int64) error {
 
 	ext := ".mp4"
 	if kind == "music" {
+		// ponytail: upload endpoint guarantees music orig_name has an extension; .mp4 fallback only reachable for movies
 		if e := filepath.Ext(origName.String); e != "" {
 			ext = e
 		}

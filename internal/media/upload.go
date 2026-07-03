@@ -37,6 +37,10 @@ func UploadRoutes(mux *http.ServeMux, d *sql.DB, dataDir string) {
 			http.Error(w, "kind must be movie|music, title required", 400)
 			return
 		}
+		if in.Kind == "music" && filepath.Ext(in.OrigName) == "" {
+			http.Error(w, "music uploads need a filename with extension", 400)
+			return
+		}
 		res, err := d.Exec(`INSERT INTO media (kind, title, orig_name) VALUES (?,?,?)`, in.Kind, in.Title, in.OrigName)
 		if err != nil {
 			http.Error(w, "server error", 500)

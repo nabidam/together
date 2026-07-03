@@ -89,3 +89,28 @@ func TestChunkedUploadWithResume(t *testing.T) {
 		t.Fatalf("want 1 pending job got %d", n)
 	}
 }
+
+func TestMusicRequiresExtension(t *testing.T) {
+	c, ts, _ := adminClient(t)
+
+	// music without extension should fail
+	r, _ := c.Post(ts.URL+"/api/admin/media", "application/json",
+		strings.NewReader(`{"kind":"music","title":"X","origName":"noext"}`))
+	if r.StatusCode != 400 {
+		t.Fatalf("music without ext: want 400 got %d", r.StatusCode)
+	}
+
+	// music with extension should succeed
+	r, _ = c.Post(ts.URL+"/api/admin/media", "application/json",
+		strings.NewReader(`{"kind":"music","title":"X","origName":"song.flac"}`))
+	if r.StatusCode != 200 {
+		t.Fatalf("music with ext: want 200 got %d", r.StatusCode)
+	}
+	var m struct{ ID int64 }
+	if err := json.NewDecoder(r.Body).Decode(&m); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if m.ID == 0 {
+		t.Fatalf("want nonzero ID")
+	}
+}
