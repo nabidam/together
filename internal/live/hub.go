@@ -164,7 +164,10 @@ func (h *Hub) Handle(w http.ResponseWriter, req *http.Request) {
 func (h *Hub) dispatch(r *room, c *client, m inMsg) {
 	switch m.Type {
 	case "ping":
-		c.send <- marshal(map[string]any{"type": "pong", "t": m.T, "serverTime": nowMs()})
+		select {
+		case c.send <- marshal(map[string]any{"type": "pong", "t": m.T, "serverTime": nowMs()}):
+		default: // ponytail: dropped frame beats leaked goroutine; client re-pings in 10s
+		}
 
 	case "chat":
 		if len(m.Body) == 0 || len(m.Body) > 2000 {
@@ -179,17 +182,26 @@ func (h *Hub) dispatch(r *room, c *client, m inMsg) {
 	case "start":
 		var status string
 		if h.db.QueryRow(`SELECT status FROM media WHERE id=? AND kind='movie'`, m.MediaID).Scan(&status) != nil || status != "ready" {
-			c.send <- marshal(map[string]any{"type": "error", "body": "media not ready"})
+			select {
+			case c.send <- marshal(map[string]any{"type": "error", "body": "media not ready"}):
+			default: // ponytail: dropped frame beats leaked goroutine; client re-pings in 10s
+			}
 			return
 		}
 		st := NewWatch(m.MediaID, nowMs())
+
+		r.mu.Lock()
+		// ponytail: DB writes under room mutex; fine at 10 users, move off-lock if rooms ever get hot
+		if r.actState != nil {
+			h.db.Exec(`UPDATE activities SET status='ended', ended_at=unixepoch() WHERE id=?`, r.actID)
+		}
 		res, err := h.db.Exec(`INSERT INTO activities (room_id, type, state_json) VALUES (?,?,?)`, r.id, "watch", string(marshal(st)))
 		if err != nil {
+			r.mu.Unlock()
 			log.Println("start activity:", err)
 			return
 		}
 		id, _ := res.LastInsertId()
-		r.mu.Lock()
 		r.actID, r.actState = id, &st
 		r.broadcast(marshal(map[string]any{"type": "activity", "activity": r.activityJSON()}))
 		r.mu.Unlock()

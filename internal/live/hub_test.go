@@ -2,6 +2,7 @@ package live
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -59,7 +60,7 @@ func waitFor(t *testing.T, c *websocket.Conn, typ string) frame {
 	return nil
 }
 
-func setup(t *testing.T) (*httptest.Server, string, string) {
+func setup(t *testing.T) (*httptest.Server, string, string, *sql.DB) {
 	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
 	t.Cleanup(func() { d.Close() })
 	auth.Seed(d, "alice", "password")
@@ -74,11 +75,11 @@ func setup(t *testing.T) (*httptest.Server, string, string) {
 	t.Cleanup(ts.Close)
 	tok1, _ := auth.CreateSession(d, 1)
 	tok2, _ := auth.CreateSession(d, 2)
-	return ts, "session=" + tok1, "session=" + tok2
+	return ts, "session=" + tok1, "session=" + tok2, d
 }
 
 func TestChatAndPresenceBroadcast(t *testing.T) {
-	ts, alice, bob := setup(t)
+	ts, alice, bob, _ := setup(t)
 	a := dial(t, ts, alice)
 	read(t, a) // hello
 	b := dial(t, ts, bob)
@@ -91,7 +92,7 @@ func TestChatAndPresenceBroadcast(t *testing.T) {
 }
 
 func TestActivitySync(t *testing.T) {
-	ts, alice, bob := setup(t)
+	ts, alice, bob, _ := setup(t)
 	a := dial(t, ts, alice)
 	read(t, a)
 	b := dial(t, ts, bob)
@@ -108,7 +109,7 @@ func TestActivitySync(t *testing.T) {
 }
 
 func TestHelloCarriesActivityForLateJoiner(t *testing.T) {
-	ts, alice, bob := setup(t)
+	ts, alice, bob, _ := setup(t)
 	a := dial(t, ts, alice)
 	read(t, a)
 	send(t, a, frame{"type": "start", "mediaId": 1})
@@ -117,5 +118,36 @@ func TestHelloCarriesActivityForLateJoiner(t *testing.T) {
 	f := read(t, b) // hello
 	if f["activity"] == nil {
 		t.Fatal("late joiner must receive running activity in hello")
+	}
+}
+
+// TestStartReplacesActiveActivity: a second "start" must end the previous
+// activity row, not orphan it — Restore()'s WHERE status='active' query
+// requires at most one active row per room.
+func TestStartReplacesActiveActivity(t *testing.T) {
+	ts, alice, _, d := setup(t)
+	a := dial(t, ts, alice)
+	read(t, a) // hello
+
+	send(t, a, frame{"type": "start", "mediaId": 1})
+	waitFor(t, a, "activity")
+
+	send(t, a, frame{"type": "start", "mediaId": 1})
+	waitFor(t, a, "activity")
+
+	var active int
+	if err := d.QueryRow(`SELECT count(*) FROM activities WHERE room_id=1 AND status='active'`).Scan(&active); err != nil {
+		t.Fatal(err)
+	}
+	if active != 1 {
+		t.Fatalf("want exactly 1 active activity, got %d", active)
+	}
+
+	var ended int
+	if err := d.QueryRow(`SELECT count(*) FROM activities WHERE room_id=1 AND status='ended' AND ended_at IS NOT NULL`).Scan(&ended); err != nil {
+		t.Fatal(err)
+	}
+	if ended < 1 {
+		t.Fatalf("want at least 1 ended activity with ended_at set, got %d", ended)
 	}
 }
