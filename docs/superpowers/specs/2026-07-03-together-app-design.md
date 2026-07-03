@@ -134,17 +134,15 @@ Real constraints to watch: **disk space** (movies are 1–8 GB each — VPS disk
 
 **C. Fork OpenTogetherTube.** Rooms + sync exist already. Rejected: built around external URLs (YouTube etc.), not owned uploads; adding auth/roles/music/drawing/couple-features fights its architecture; we'd own a fork of a codebase we didn't design.
 
-## 5. Tech stack (open question — user preference wanted)
+## 5. Tech stack (decided 2026-07-03)
 
-Language-agnostic design above holds for any of:
+**Backend: Go.** Single static binary at ~30–80 MB RSS — the strongest fit for the 2 GB VPS. Standard library covers HTTP routing (`net/http`, Go 1.22+ patterns), chunked uploads, and `os/exec` for ffmpeg. Minimal dependency set: one WebSocket library, one SQLite driver. The built frontend is embedded in the binary via `embed.FS`, so deployment is one file + Caddy + systemd.
 
-| Option | RAM | Notes |
-|--------|-----|-------|
-| **Go** | ~30–80 MB | Single static binary, superb WebSocket/concurrency story, embed SPA in binary. Strongest fit for the VPS. |
-| **Node/TypeScript** | ~150–300 MB | One language across front+back; huge ecosystem (tus, ffmpeg wrappers). Fine at this scale. |
-| **Python (FastAPI)** | ~150–300 MB | Fastest to iterate; async WebSockets fine at 10 users. |
+Rejected: Node/TypeScript and Python (FastAPI) — both workable at this scale but 2–5× the memory and a heavier ops story for no capability gain. Full comparison in `docs/research/2026-07-03-prior-art-and-process.md` §5.
 
-Frontend: lightweight SPA (Svelte or React + Vite) as PWA. Video via native `<video>` element (+ hls.js only if HLS is ever needed) — no heavy player framework.
+**Frontend: Svelte 5 + Vite + Tailwind CSS v4**, served as a PWA. Smallest runtime among the major frameworks; design tokens from `design.md` map directly to Tailwind `@theme` CSS variables. Media via native `<video>`/`<audio>` elements (hls.js only if HLS ever becomes necessary); drawing via the native Canvas API. No player framework, no canvas library.
+
+**Implementation discipline:** all implementation follows the **ponytail** skill (full level) — stdlib/native-platform first, no speculative abstraction, shortest working diff, deliberate shortcuts marked with `ponytail:` comments and harvested via `/ponytail-debt`. Implementation sessions load `ponytail:ponytail` before writing code.
 
 ## 6. Versioned scope
 
@@ -172,8 +170,36 @@ Frontend: lightweight SPA (Svelte or React + Vite) as PWA. Video via native `<vi
 
 ## 9. Open questions for user
 
-1. Tech stack preference (Go / TypeScript / Python / other)?
+1. ~~Tech stack preference~~ → decided: Go + Svelte (§5).
 2. VPS disk size? Determines how much media fits and whether we need an "auto-delete watched" policy.
 3. Phone usage important for v1 (PWA polish) or laptop-first?
 4. One active activity per room (v1) acceptable?
 5. Which V3 fun features excite you most (prioritize)?
+
+## 10. UI design direction — hyper-futuristic minimal
+
+**Source of truth: `design.md` (NxCode design system) at repo root.** All colors, typography, radii, spacing, motion values come from its tokens — never hardcode hex values in components; map tokens to Tailwind `@theme` CSS variables once.
+
+Independent validation: a ui-ux-pro-max design-system query for this product class recommended "Dark Mode (OLED), terminal dark + success green, minimal glow" — converging with NxCode. Its font/palette suggestions were discarded in favor of design.md.
+
+**Concept: a calm command center for two.** The app reads like a beautifully engineered terminal the couple SSH'd into together. Hyper-futuristic comes from precision and restraint — not gradients or chrome.
+
+- **Dark only.** Graphite ramp from design.md (`#060709` → `#0A0C0F` page → `#1A1F26` cards). No light mode (NxCode is dark-native; halves theming work).
+- **Structure by hairline.** 1px `#2C343F` borders carry layout; flat fills; no heavy shadows.
+- **Green = alive.** Signal green (#22D86B) reserved for presence and liveness: partner-online dot with soft glow, "activity live" indicator, primary action. The partner's presence dot is the emotional center of the UI — it glows like a cursor when they're online.
+- **Cyan = data/focus.** Links, focus rings, seek-position markers.
+- **Mono voice.** JetBrains Mono eyebrows (`// ROOM — MOVIE NIGHT`), timestamps, durations, sync status (`● SYNCED · 3 WATCHING`, `▸ 01:23:45`). All numerics monospaced.
+- **Motion**: 120/200/360 ms, `cubic-bezier(.16,1,.3,1)`, opacity/transform only, no bounce, `prefers-reduced-motion` respected.
+- **Icons**: Lucide, 1.75px stroke. No emoji in chrome (chat messages may contain user emoji/reactions — that's content, not chrome).
+
+**Key screens:**
+- **Rooms list** — command-center: room cards with mono status line (members online, active activity), one green "create room" primary action.
+- **Room view** — activity stage (large) + chat rail (right, collapsible on mobile); member presence dots in header.
+- **Theater mode** — when Watch Movie runs: chrome fades to near-black, custom minimal player controls (mono timecode, hairline seek bar with participants' buffer states), sync status pill top-right; controls auto-hide, reappear on pointer/touch.
+- **Admin** — upload queue rendered like a build pipeline: `[##########----] transcoding · 42% · nice 19`, mono throughout, failed jobs red with stderr tail + retry.
+
+**UX floors (non-negotiable, from ui-ux-pro-max):** contrast ≥4.5:1 for text on graphite; visible cyan focus rings; touch targets ≥44px; body ≥15–16px; skeletons over spinners past 300ms; `min-h-dvh` not `100vh`; no horizontal scroll at 375px.
+
+## 11. Process log
+
+Research, decision rationale, queries, and tooling recorded in `docs/research/2026-07-03-prior-art-and-process.md` for reproducibility.
