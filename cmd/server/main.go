@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"together/internal/auth"
 	"together/internal/db"
 )
 
@@ -27,7 +28,13 @@ func main() {
 	}
 	defer d.Close()
 
+	if err := auth.Seed(d, os.Getenv("ADMIN_USER"), os.Getenv("ADMIN_PASS")); err != nil {
+		log.Fatal(err)
+	}
+
 	mux := http.NewServeMux()
+	// ponytail: SameSite=Lax + HttpOnly suffices behind TLS proxy on private instance
+	auth.Routes(mux, d)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })
 
 	addr := env("TOGETHER_ADDR", ":8080")
