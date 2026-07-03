@@ -48,6 +48,7 @@ func main() {
 	auth.Routes(mux, d)
 	api.Routes(mux, d)
 	media.UploadRoutes(mux, d, dataDir)
+	media.ServeRoutes(mux, d)
 	mux.HandleFunc("GET /ws/{id}", auth.Require(d, false, hub.Handle))
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })
 
