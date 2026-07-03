@@ -20,6 +20,7 @@ func pathID(r *http.Request) int64 {
 	return id
 }
 
+// ponytail: room privacy/passwords deferred; add rooms.password_hash when >2 users actually want it
 func Routes(mux *http.ServeMux, d *sql.DB) {
 	mux.HandleFunc("GET /api/rooms", auth.Require(d, false, func(w http.ResponseWriter, r *http.Request) {
 		rows, _ := d.Query(`SELECT id, name, owner_id, created_at FROM rooms ORDER BY created_at DESC`)
