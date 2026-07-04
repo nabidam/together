@@ -2,23 +2,51 @@ import { post } from "./api.js";
 
 const CHUNK = 8 * 1024 * 1024;
 
-export async function uploadMedia({ kind, title, file, subtitle, onProgress }) {
-  const { id } = await post("/api/admin/media", { kind, title, origName: file.name });
-  // ponytail: resume = ask server how much it has, start there
+// ponytail: resume = ask server how much it has, start there
+async function uploadChunks(id, file, onProgress) {
   const { size: start } = await (await fetch(`/api/admin/media/${id}/blob`)).json();
   for (let off = start; off < file.size; off += CHUNK) {
     const res = await fetch(`/api/admin/media/${id}/blob?offset=${off}`, {
       method: "PATCH",
       body: file.slice(off, off + CHUNK),
     });
-    if (!res.ok) throw new Error(await res.text());
+    if (!res.ok) {
+      const err = new Error(await res.text());
+      err.status = res.status;
+      throw err;
+    }
     onProgress?.(Math.min(off + CHUNK, file.size), file.size);
   }
+}
+
+export async function uploadMedia({ kind, title, file, subtitle, onProgress }) {
+  // ponytail: filename+size as identity; hash-based dedupe never (2-user instance)
+  const key = "together.upload." + file.name + "." + file.size;
+  let id = localStorage.getItem(key);
+
+  if (id) {
+    try {
+      await uploadChunks(id, file, onProgress);
+    } catch (err) {
+      if (err.status !== 409) throw err;
+      // stale token: row finished/deleted server-side, one retry via fresh create
+      localStorage.removeItem(key);
+      id = null;
+    }
+  }
+
+  if (!id) {
+    ({ id } = await post("/api/admin/media", { kind, title, origName: file.name }));
+    localStorage.setItem(key, id);
+    await uploadChunks(id, file, onProgress);
+  }
+
   if (subtitle) {
     const label = encodeURIComponent(subtitle.name.replace(/\.(srt|vtt|ass)$/i, ""));
     const res = await fetch(`/api/admin/media/${id}/subtitle?label=${label}`, { method: "POST", body: subtitle });
     if (!res.ok) throw new Error(await res.text());
   }
   await post(`/api/admin/media/${id}/finish`);
+  localStorage.removeItem(key);
   return id;
 }
