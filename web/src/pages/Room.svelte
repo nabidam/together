@@ -3,16 +3,20 @@
   import { go } from "../lib/router.svelte.js";
   import { connect } from "../lib/ws.js";
   import Chat from "../components/Chat.svelte";
-  import { ArrowLeft, Circle } from "lucide-svelte";
+  import Player from "../components/Player.svelte";
+  import { ArrowLeft, Circle, Clapperboard } from "lucide-svelte";
 
   let { me, roomId } = $props();
   let messages = $state([]);
   let users = $state([]);
   let activity = $state(null);
+  let movies = $state([]);
+  let picking = $state(false);
   let sock;
 
   $effect(() => {
     get(`/api/rooms/${roomId}/messages`).then((h) => (messages = [...h, ...messages]));
+    get("/api/media?kind=movie").then((m) => (movies = m));
     sock = connect(roomId, (m) => {
       if (m.type === "hello") { users = m.users; activity = m.activity; }
       else if (m.type === "presence") users = m.users;
@@ -21,6 +25,8 @@
     });
     return () => sock.close();
   });
+
+  const activeMedia = $derived(activity && movies.find((m) => m.id === activity.state.mediaId));
 </script>
 
 <main class="h-dvh flex flex-col">
@@ -38,12 +44,31 @@
   </header>
 
   <div class="flex-1 min-h-0 flex flex-col md:flex-row">
-    <section class="flex-1 min-h-0 grid place-items-center p-6">
-      <!-- Player mounts here in Task 11 -->
-      <div class="text-center">
-        <p class="eyebrow">// no activity</p>
-        <p class="text-fg mt-2">Start watching something together from here soon.</p>
-      </div>
+    <section class="flex-1 min-h-0 relative">
+      {#if activity && activeMedia}
+        <Player {activity} {sock} media={activeMedia} onend={() => sock.send({ type: "end" })} />
+      {:else}
+        <div class="h-full grid place-items-center p-6">
+          {#if picking}
+            <div class="card p-4 w-full max-w-md flex flex-col gap-2 max-h-[70%] overflow-y-auto">
+              <span class="eyebrow">// pick a movie</span>
+              {#each movies as m (m.id)}
+                <button class="btn-ghost justify-start" onclick={() => { sock.send({ type: "start", mediaId: m.id }); picking = false; }}>
+                  <Clapperboard size={16} /> {m.title}
+                </button>
+              {:else}
+                <p class="text-fg p-2">Nothing uploaded yet — ask your admin.</p>
+              {/each}
+              <button class="text-secondary text-[13px] cursor-pointer hover:underline" onclick={() => (picking = false)}>Cancel</button>
+            </div>
+          {:else}
+            <div class="text-center">
+              <p class="eyebrow">// no activity</p>
+              <button class="btn-primary mt-4" onclick={() => (picking = true)}><Clapperboard size={16} /> Watch a movie</button>
+            </div>
+          {/if}
+        </div>
+      {/if}
     </section>
     <aside class="md:w-80 md:border-l border-t md:border-t-0 border-border h-64 md:h-auto shrink-0">
       <Chat {messages} send={(b) => sock.send({ type: "chat", body: b })} />
