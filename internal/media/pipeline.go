@@ -78,6 +78,8 @@ func Plan(kind string, i Info) []string {
 
 // Worker processes pending jobs one at a time. Run as a goroutine; respects ctx.
 func Worker(ctx context.Context, d *sql.DB, dataDir string) {
+	// ponytail: reclaim jobs orphaned by a crash; process() is idempotent (-y, re-probe)
+	d.Exec(`UPDATE jobs SET status='pending' WHERE status='running'`)
 	tick := time.NewTicker(5 * time.Second)
 	defer tick.Stop()
 	for {
