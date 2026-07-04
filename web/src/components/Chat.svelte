@@ -20,7 +20,7 @@
 
 <div class="flex flex-col h-full min-h-0">
   <ul bind:this={list} class="flex-1 overflow-y-auto flex flex-col gap-3 p-4" aria-live="polite">
-    {#each messages as m (m.id ?? `${m.createdAt}-${m.userId}-${m.body}`)}
+    {#each messages as m (m.id ?? m._k)}
       <li class="text-[15px]">
         <span class="font-mono text-[11px] text-fg/60">{fmt(m.createdAt)}</span>
         <span class="text-secondary font-medium ml-1">{m.username}</span>

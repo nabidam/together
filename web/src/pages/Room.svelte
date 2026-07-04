@@ -16,7 +16,7 @@
     sock = connect(roomId, (m) => {
       if (m.type === "hello") { users = m.users; activity = m.activity; }
       else if (m.type === "presence") users = m.users;
-      else if (m.type === "chat") messages = [...messages, m];
+      else if (m.type === "chat") messages = [...messages, { ...m, _k: crypto.randomUUID() }];
       else if (m.type === "activity") activity = m.activity;
     });
     return () => sock.close();
