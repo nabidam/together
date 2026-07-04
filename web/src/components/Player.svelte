@@ -5,6 +5,7 @@
   let { activity, sock, media, onend } = $props();
   // media: {id, title, duration, subtitles:[{id,label}]} — looked up by Room from catalog
   let video = $state(null);
+  let curTime = $state(0);
   let showControls = $state(true);
   let hideTimer;
 
@@ -59,7 +60,7 @@
 <!-- theater mode: fills its container, near-void background, auto-hiding controls -->
 <div class="relative w-full h-full bg-void" role="presentation" onpointermove={poke} ontouchstart={poke}>
   <!-- svelte-ignore a11y_media_has_caption -->
-  <video bind:this={video} class="w-full h-full object-contain" src={`/media/${media.id}/stream`} playsinline crossorigin="use-credentials">
+  <video bind:this={video} class="w-full h-full object-contain" src={`/media/${media.id}/stream`} playsinline crossorigin="use-credentials" ontimeupdate={() => (curTime = video?.currentTime ?? 0)}>
     {#each media.subtitles as s (s.id)}
       <track kind="subtitles" label={s.label} src={`/media/${media.id}/subs/${s.id}`} />
     {/each}
@@ -67,12 +68,12 @@
 
   <div class="absolute inset-x-0 bottom-0 p-4 flex flex-col gap-2 bg-gradient-to-t from-void/90 to-transparent
               transition-opacity duration-[360ms]" style="opacity: {showControls ? 1 : 0}; pointer-events: {showControls ? 'auto' : 'none'}">
-    <div class="h-6 flex items-center cursor-pointer" onclick={scrub} role="slider" tabindex="0"
-         aria-label="Seek" aria-valuemin="0" aria-valuemax={media.duration} aria-valuenow={video?.currentTime ?? 0}
+    <div class="h-11 flex items-center cursor-pointer" onclick={scrub} role="slider" tabindex="0"
+         aria-label="Seek" aria-valuemin="0" aria-valuemax={media.duration} aria-valuenow={curTime}
          onkeydown={(e) => { if (e.key === "ArrowRight") seekBy(10); if (e.key === "ArrowLeft") seekBy(-10); }}>
       <div class="h-px w-full bg-border relative">
         <div class="absolute inset-y-0 left-0 bg-primary h-px glow-green"
-             style="width: {((video?.currentTime ?? 0) / (media.duration || 1)) * 100}%"></div>
+             style="width: {(curTime / (media.duration || 1)) * 100}%"></div>
       </div>
     </div>
     <div class="flex items-center gap-2">
@@ -82,7 +83,7 @@
       </button>
       <button class="btn-ghost !h-11 !w-11 !px-0" onclick={() => seekBy(-10)} aria-label="Back 10 seconds"><RotateCcw size={16} /></button>
       <button class="btn-ghost !h-11 !w-11 !px-0" onclick={() => seekBy(10)} aria-label="Forward 10 seconds"><RotateCw size={16} /></button>
-      <span class="font-mono text-[13px] text-fg-strong ml-2">{tc(video?.currentTime ?? 0)} <span class="text-fg/50">/ {tc(media.duration)}</span></span>
+      <span class="font-mono text-[13px] text-fg-strong ml-2">{tc(curTime)} <span class="text-fg/50">/ {tc(media.duration)}</span></span>
       <span class="eyebrow ml-auto hidden sm:inline">● synced</span>
       <a class="btn-ghost !h-11 !w-11 !px-0" href={`/media/${media.id}/download`} aria-label="Download for offline"><Download size={16} /></a>
       <button class="btn-ghost !h-11 !w-11 !px-0" onclick={() => document.fullscreenElement ? document.exitFullscreen() : video?.parentElement?.requestFullscreen()} aria-label="Fullscreen"><Maximize size={16} /></button>
