@@ -1,0 +1,15 @@
+[Unit]
+Description=together
+After=network.target
+
+[Service]
+User=together
+Environment=TOGETHER_ADDR=127.0.0.1:8080
+Environment=TOGETHER_DATA=/var/lib/together
+EnvironmentFile=-/etc/together.env
+ExecStart=/usr/local/bin/together
+Restart=on-failure
+MemoryMax=1200M
+
+[Install]
+WantedBy=multi-user.target
