@@ -59,7 +59,11 @@ func Routes(mux *http.ServeMux, d *sql.DB) {
 
 	mux.HandleFunc("DELETE /api/rooms/{id}", auth.Require(d, false, func(w http.ResponseWriter, r *http.Request) {
 		u := auth.From(r)
-		res, _ := d.Exec(`DELETE FROM rooms WHERE id=? AND (owner_id=? OR 'admin'=?)`, pathID(r), u.ID, u.Role)
+		res, err := d.Exec(`DELETE FROM rooms WHERE id=? AND (owner_id=? OR 'admin'=?)`, pathID(r), u.ID, u.Role)
+		if err != nil {
+			http.Error(w, "server error", 500)
+			return
+		}
 		if n, _ := res.RowsAffected(); n == 0 {
 			http.Error(w, "not found or not yours", 404)
 			return

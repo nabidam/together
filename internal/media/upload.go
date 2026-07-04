@@ -114,7 +114,11 @@ func UploadRoutes(mux *http.ServeMux, d *sql.DB, dataDir string) {
 
 	mux.HandleFunc("POST /api/admin/media/{id}/finish", adm(func(w http.ResponseWriter, r *http.Request) {
 		id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
-		res, _ := d.Exec(`UPDATE media SET status='processing' WHERE id=? AND status='uploading'`, id)
+		res, err := d.Exec(`UPDATE media SET status='processing' WHERE id=? AND status='uploading'`, id)
+		if err != nil {
+			http.Error(w, "server error", 500)
+			return
+		}
 		if n, _ := res.RowsAffected(); n == 0 {
 			http.Error(w, "not found or already finished", 409)
 			return
