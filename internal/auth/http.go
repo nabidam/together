@@ -38,13 +38,18 @@ func writeJSON(w http.ResponseWriter, v any) {
 	json.NewEncoder(w).Encode(v)
 }
 
-func setSession(w http.ResponseWriter, d *sql.DB, u User) error {
+// ponytail: Secure when TLS-terminated by Caddy; plain http only in dev/tests
+func secureCookie(r *http.Request) bool {
+	return r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
+}
+
+func setSession(w http.ResponseWriter, r *http.Request, d *sql.DB, u User) error {
 	tok, err := CreateSession(d, u.ID)
 	if err != nil {
 		return err
 	}
 	http.SetCookie(w, &http.Cookie{Name: "session", Value: tok, Path: "/",
-		HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: 30 * 24 * 3600})
+		HttpOnly: true, Secure: secureCookie(r), SameSite: http.SameSiteLaxMode, MaxAge: 30 * 24 * 3600})
 	return nil
 }
 
@@ -59,7 +64,7 @@ func Routes(mux *http.ServeMux, d *sql.DB) {
 			http.Error(w, err.Error(), 401)
 			return
 		}
-		if err := setSession(w, d, u); err != nil {
+		if err := setSession(w, r, d, u); err != nil {
 			http.Error(w, "server error", 500)
 			return
 		}
@@ -78,7 +83,7 @@ func Routes(mux *http.ServeMux, d *sql.DB) {
 			http.Error(w, err.Error(), 400)
 			return
 		}
-		if err := setSession(w, d, u); err != nil {
+		if err := setSession(w, r, d, u); err != nil {
 			http.Error(w, "server error", 500)
 			return
 		}
@@ -89,7 +94,7 @@ func Routes(mux *http.ServeMux, d *sql.DB) {
 		if c, err := r.Cookie("session"); err == nil {
 			DeleteSession(d, c.Value)
 		}
-		http.SetCookie(w, &http.Cookie{Name: "session", Value: "", Path: "/", MaxAge: -1})
+		http.SetCookie(w, &http.Cookie{Name: "session", Value: "", Path: "/", MaxAge: -1, Secure: secureCookie(r)})
 	})
 
 	mux.HandleFunc("GET /api/me", Require(d, false, func(w http.ResponseWriter, r *http.Request) {
