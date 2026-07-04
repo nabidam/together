@@ -19,10 +19,20 @@ async function uploadChunks(id, file, onProgress) {
   }
 }
 
+async function finish(id) {
+  const res = await fetch(`/api/admin/media/${id}/finish`, { method: "POST" });
+  if (!res.ok) {
+    const err = new Error(await res.text());
+    err.status = res.status;
+    throw err;
+  }
+}
+
 export async function uploadMedia({ kind, title, file, subtitle, onProgress }) {
   // ponytail: filename+size as identity; hash-based dedupe never (2-user instance)
   const key = "together.upload." + file.name + "." + file.size;
   let id = localStorage.getItem(key);
+  let resumed = !!id;
 
   if (id) {
     try {
@@ -32,6 +42,7 @@ export async function uploadMedia({ kind, title, file, subtitle, onProgress }) {
       // stale token: row finished/deleted server-side, one retry via fresh create
       localStorage.removeItem(key);
       id = null;
+      resumed = false;
     }
   }
 
@@ -43,10 +54,21 @@ export async function uploadMedia({ kind, title, file, subtitle, onProgress }) {
 
   if (subtitle) {
     const label = encodeURIComponent(subtitle.name.replace(/\.(srt|vtt|ass)$/i, ""));
-    const res = await fetch(`/api/admin/media/${id}/subtitle?label=${label}`, { method: "POST", body: subtitle });
-    if (!res.ok) throw new Error(await res.text());
+    try {
+      const res = await fetch(`/api/admin/media/${id}/subtitle?label=${label}`, { method: "POST", body: subtitle });
+      if (!res.ok) throw new Error(await res.text());
+    } catch (err) {
+      // resumed row may already be finished server-side; subtitle failure there is harmless, finish-409 below is what matters
+      if (!resumed) throw err;
+    }
   }
-  await post(`/api/admin/media/${id}/finish`);
+
+  try {
+    await finish(id);
+  } catch (err) {
+    // finish 409 is only reachable on the resume path, and means the row already finished earlier - treat as success
+    if (err.status !== 409 || !resumed) throw err;
+  }
   localStorage.removeItem(key);
   return id;
 }
