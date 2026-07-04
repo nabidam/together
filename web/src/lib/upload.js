@@ -40,6 +40,7 @@ export async function uploadMedia({ kind, title, file, subtitle, onProgress }) {
     } catch (err) {
       if (err.status !== 409) throw err;
       // stale token: row finished/deleted server-side, one retry via fresh create
+      // ponytail: resuming a row the worker already processed re-uploads under a new id (blob was moved); duplicate row possible in that narrow window — admin deletes it. Server-side blob-status probe never (2-user instance).
       localStorage.removeItem(key);
       id = null;
       resumed = false;
@@ -54,13 +55,8 @@ export async function uploadMedia({ kind, title, file, subtitle, onProgress }) {
 
   if (subtitle) {
     const label = encodeURIComponent(subtitle.name.replace(/\.(srt|vtt|ass)$/i, ""));
-    try {
-      const res = await fetch(`/api/admin/media/${id}/subtitle?label=${label}`, { method: "POST", body: subtitle });
-      if (!res.ok) throw new Error(await res.text());
-    } catch (err) {
-      // resumed row may already be finished server-side; subtitle failure there is harmless, finish-409 below is what matters
-      if (!resumed) throw err;
-    }
+    const res = await fetch(`/api/admin/media/${id}/subtitle?label=${label}`, { method: "POST", body: subtitle });
+    if (!res.ok) throw new Error(await res.text());
   }
 
   try {
