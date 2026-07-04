@@ -39,7 +39,7 @@
 
 <main class="min-h-dvh max-w-3xl mx-auto p-6 flex flex-col gap-6">
   <header class="flex items-center gap-3">
-    <button class="btn-ghost !h-9 !px-2" onclick={() => go("/")} aria-label="Back"><ArrowLeft size={16} /></button>
+    <button class="btn-ghost !h-11 !px-2" onclick={() => go("/")} aria-label="Back"><ArrowLeft size={16} /></button>
     <div>
       <span class="eyebrow">// admin</span>
       <h1 class="text-fg-strong text-2xl font-semibold tracking-tight">Platform</h1>
@@ -74,19 +74,19 @@
   <section class="card p-6 flex flex-col gap-3">
     <div class="flex items-center justify-between">
       <span class="eyebrow">// library</span>
-      <button class="btn-ghost !h-9 !px-2" onclick={load} aria-label="Refresh"><RefreshCw size={14} /></button>
+      <button class="btn-ghost !h-11 !px-2" onclick={load} aria-label="Refresh"><RefreshCw size={14} /></button>
     </div>
     <ul class="flex flex-col gap-2">
       {#each media as m (m.id)}
         <li class="flex items-center gap-3 border-b border-border pb-2 last:border-0">
           <span class="font-mono text-[11px] text-fg/60 w-8">#{m.id}</span>
-          <span class="text-fg-strong flex-1">{m.title}</span>
+          <span class="text-fg-strong flex-1 min-w-0 truncate">{m.title}</span>
           <span class="font-mono text-[11px]"
                 class:text-primary={m.status === "ready"}
                 class:text-warning={m.status === "processing" || m.status === "uploading"}
                 class:text-error={m.status === "failed"}>● {m.status}</span>
           {#if m.sizeBytes}<span class="font-mono text-[11px] text-fg/60">{fmtGB(m.sizeBytes)}</span>{/if}
-          <button class="btn-ghost !h-9 !w-9 !px-0" aria-label="Delete {m.title}"
+          <button class="btn-ghost !h-11 !w-11 !px-0" aria-label="Delete {m.title}"
                   onclick={() => confirm(`Delete "${m.title}"?`) && del(`/api/admin/media/${m.id}`).then(load)}>
             <Trash2 size={14} class="text-error" />
           </button>

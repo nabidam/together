@@ -39,7 +39,8 @@
     {/if}
     {#if error}<p class="text-error text-[13px]" role="alert">{error}</p>{/if}
     <button class="btn-primary" disabled={busy}>{busy ? "…" : mode === "login" ? "Sign in" : "Create account"}</button>
-    <button type="button" class="text-secondary text-[13px] cursor-pointer text-left hover:underline"
+    <button type="button" class="text-secondary text-[13px] cursor-pointer text-left hover:underline rounded-sm
+      focus-visible:outline-2 focus-visible:outline-secondary focus-visible:outline-offset-2"
       onclick={() => { mode = mode === "login" ? "register" : "login"; error = ""; }}>
       {mode === "login" ? "Have an invite code?" : "Already have an account?"}
     </button>

@@ -50,7 +50,7 @@
                        transition-colors duration-200 hover:border-fg/30
                        focus-visible:outline-2 focus-visible:outline-secondary"
           onclick={() => go(`/rooms/${r.id}`)}>
-          <span class="text-fg-strong font-medium">{r.name}</span>
+          <span class="text-fg-strong font-medium min-w-0 break-words">{r.name}</span>
           <span class="eyebrow flex items-center gap-2"><DoorOpen size={14} /> enter</span>
         </button>
       </li>

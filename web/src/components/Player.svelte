@@ -68,7 +68,8 @@
 
   <div class="absolute inset-x-0 bottom-0 p-4 flex flex-col gap-2 bg-gradient-to-t from-void/90 to-transparent
               transition-opacity duration-[360ms]" style="opacity: {showControls ? 1 : 0}; pointer-events: {showControls ? 'auto' : 'none'}">
-    <div class="h-11 flex items-center cursor-pointer" onclick={scrub} role="slider" tabindex="0"
+    <div class="h-11 flex items-center cursor-pointer rounded-sm focus-visible:outline-2 focus-visible:outline-secondary focus-visible:outline-offset-2"
+         onclick={scrub} role="slider" tabindex="0"
          aria-label="Seek" aria-valuemin="0" aria-valuemax={media.duration} aria-valuenow={curTime}
          onkeydown={(e) => { if (e.key === "ArrowRight") seekBy(10); if (e.key === "ArrowLeft") seekBy(-10); }}>
       <div class="h-px w-full bg-border relative">
@@ -77,8 +78,7 @@
       </div>
     </div>
     <div class="flex items-center gap-2">
-      <button class="btn-ghost !h-11 !w-11 !px-0" onclick={() => intent(st.paused ? "play" : "pause")}
-              aria-label={st.paused ? "Play" : "Pause"}>
+      <button class="btn-ghost !h-11 !w-11 !px-0" onclick={() => intent(st.paused ? "play" : "pause")} aria-label={st.paused ? "Play" : "Pause"}>
         {#if st.paused}<Play size={18} />{:else}<Pause size={18} />{/if}
       </button>
       <button class="btn-ghost !h-11 !w-11 !px-0" onclick={() => seekBy(-10)} aria-label="Back 10 seconds"><RotateCcw size={16} /></button>

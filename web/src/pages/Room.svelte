@@ -31,11 +31,11 @@
 
 <main class="h-dvh flex flex-col">
   <header class="h-14 border-b border-border flex items-center gap-3 px-4 shrink-0">
-    <button class="btn-ghost !h-9 !px-2" onclick={() => go("/")} aria-label="Back to rooms"><ArrowLeft size={16} /></button>
+    <button class="btn-ghost !h-11 !px-2" onclick={() => go("/")} aria-label="Back to rooms"><ArrowLeft size={16} /></button>
     <span class="eyebrow">// room {roomId}</span>
-    <div class="ml-auto flex items-center gap-3">
+    <div class="ml-auto flex items-center gap-3 min-w-0 overflow-x-auto">
       {#each users as u (u.id)}
-        <span class="flex items-center gap-1.5 text-[13px] text-fg-strong">
+        <span class="flex items-center gap-1.5 text-[13px] text-fg-strong shrink-0 break-words">
           <Circle size={8} class="fill-primary text-primary" aria-hidden="true" />
           {u.username}
         </span>
@@ -59,7 +59,8 @@
               {:else}
                 <p class="text-fg p-2">Nothing uploaded yet — ask your admin.</p>
               {/each}
-              <button class="text-secondary text-[13px] cursor-pointer hover:underline" onclick={() => (picking = false)}>Cancel</button>
+              <button class="text-secondary text-[13px] cursor-pointer hover:underline rounded-sm
+              focus-visible:outline-2 focus-visible:outline-secondary focus-visible:outline-offset-2" onclick={() => (picking = false)}>Cancel</button>
             </div>
           {:else}
             <div class="text-center">
