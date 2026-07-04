@@ -70,8 +70,10 @@ Cross-cutting lessons:
 - **ponytail (full)** — governs all implementation: lazy-senior-dev ladder (YAGNI → reuse → stdlib → native platform → existing dep → one line → minimal code), deliberate shortcuts marked with `ponytail:` comments, one runnable check per non-trivial unit. All implementation sessions should load `ponytail:ponytail` first.
 - **superpowers:writing-plans → executing-plans** — next: implementation plan from the spec.
 
-## 7. Next steps
+## 7. Execution record (updated 2026-07-04)
 
-1. Implementation plan (writing-plans skill) from spec V1 scope.
-2. Implement under ponytail rules; TDD for the sync state machine.
-3. Track deferred shortcuts via `/ponytail-debt`.
+1. ~~Implementation plan~~ → written: `docs/superpowers/plans/2026-07-03-together-v1.md` (14 TDD tasks, complete code per step).
+2. ~~Implement~~ → executed 2026-07-03/04 via superpowers:subagent-driven-development: fresh implementer subagent per task (haiku for transcription tasks, sonnet for integration), spec+quality reviewer per task, fix→re-review loops, final whole-branch review on the most capable model. Ledger: `.superpowers/sdd/progress.md`.
+3. Outcome: 31 commits merged to main (`9e45542`), 5,374 lines, all suites green. 19 review findings fixed during execution — several were defects in the plan's own reference code (invite-code burn, zombie WS reconnect, non-reactive player progress, stranded transcode jobs, SIGTERM hang), validating the per-task review gate.
+4. Debt tracked in `docs/debt.md`; `ponytail:` comments in code are the live ledger (`/ponytail-debt` to harvest).
+5. Fresh-context onboarding: read `CLAUDE.md` → spec §12 (as-built) → `docs/debt.md`.

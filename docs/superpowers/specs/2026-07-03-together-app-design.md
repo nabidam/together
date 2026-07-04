@@ -1,7 +1,7 @@
-# "Together" — Long-Distance Relationship App — Design (DRAFT, pending user review)
+# "Together" — Long-Distance Relationship App — Design
 
-**Date:** 2026-07-03
-**Status:** Draft — assumptions below need user confirmation
+**Date:** 2026-07-03 (as-built addendum §12: 2026-07-04)
+**Status:** V1 IMPLEMENTED and merged to main (head `9e45542`). Assumptions A1–A5 confirmed by user during review. See §12 for deviations from this design as written.
 **Scale target:** ≤10 users, single VPS (2 vCPU / 2 GB RAM)
 
 ## 1. Purpose
@@ -203,3 +203,18 @@ Independent validation: a ui-ux-pro-max design-system query for this product cla
 ## 11. Process log
 
 Research, decision rationale, queries, and tooling recorded in `docs/research/2026-07-03-prior-art-and-process.md` for reproducibility.
+
+## 12. As-built deviations (V1, 2026-07-04)
+
+Implementation followed this spec via `docs/superpowers/plans/2026-07-03-together-v1.md` (14 tasks, subagent-driven, per-task + final review). Deliberate deviations, all reviewed and approved:
+
+1. **§3.1 "reverse proxy serves media":** media is served by the Go process via `http.ServeFile` behind session auth, Caddy is a pure TLS proxy. Proxy-served files would have bypassed auth; stdlib gives Range/206 + sendfile anyway. Caddy auto-sets `X-Forwarded-Proto`, which drives the cookie's conditional `Secure` flag.
+2. **§3.5 room membership:** no `room_members` table — every authenticated user may enter any room (instance is invite-gated, A3). Room privacy deferred (ponytail note in `internal/api/rooms.go`).
+3. **§3.6 schema:** `invite_codes.expires_at`, `activity_participants`, and `sessions.id` (token is the PK) dropped as unneeded for V1; `media.error` added for failed-pipeline surfacing.
+4. **Presence payload** includes `role` in addition to id/username (additive, harmless).
+5. **§3.2 checkpoint cadence:** state checkpointed on *every* intent instead of "every few seconds" — simpler and stronger; restart-restore projects live position losslessly.
+6. **§7 partial:** disk-free check, orphaned-upload GC, admin disk-usage display, and transcode retry *button* were not built in V1 — tracked in `docs/debt.md` (worker does reclaim crashed jobs at startup).
+
+Hardening added beyond spec: backward-clock clamp in the sync state machine (server + JS mirror), transactional invite redemption, upload continuation tokens surviving page reloads, orphaned-job reclaim, SIGTERM fast-exit.
+
+Full per-task review trail: `.superpowers/sdd/progress.md`. Current debt: `docs/debt.md`. Agent onboarding: `CLAUDE.md`.

@@ -1,6 +1,17 @@
 # together
 
-Private watch-together app for two. Go + SQLite + Svelte. Spec and plan in `docs/`.
+Private watch-together app for two. Go + SQLite + Svelte, one binary on a 2GB VPS. Synced movie playback in rooms with chat and presence; admin uploads .mp4/.mkv + subtitles, processed once by ffmpeg (never live-transcoded).
+
+## Docs
+
+| File | What |
+|------|------|
+| `CLAUDE.md` | Agent/developer onboarding: commands, architecture, constraints, hazards |
+| `docs/superpowers/specs/2026-07-03-together-app-design.md` | Design spec; §12 = as-built deviations |
+| `docs/superpowers/plans/2026-07-03-together-v1.md` | Executed V1 implementation plan |
+| `docs/research/2026-07-03-prior-art-and-process.md` | Prior-art research + process/decision log |
+| `docs/debt.md` | Deferred work, accepted ceilings, V2 scope |
+| `design.md` | NxCode design tokens — source of truth for all UI styling |
 
 ## Dev
     ADMIN_USER=admin ADMIN_PASS=changeme go run ./cmd/server   # api on :8080
