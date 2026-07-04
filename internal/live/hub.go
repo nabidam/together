@@ -174,7 +174,9 @@ func (h *Hub) dispatch(r *room, c *client, m inMsg) {
 			return
 		}
 		now := time.Now().Unix()
-		h.db.Exec(`INSERT INTO messages (room_id, user_id, body, created_at) VALUES (?,?,?,?)`, r.id, c.user.ID, m.Body, now)
+		if _, err := h.db.Exec(`INSERT INTO messages (room_id, user_id, body, created_at) VALUES (?,?,?,?)`, r.id, c.user.ID, m.Body, now); err != nil {
+			log.Println("chat insert:", err) // still broadcast: ephemeral delivery beats a dropped message
+		}
 		r.mu.Lock()
 		r.broadcast(marshal(map[string]any{"type": "chat", "userId": c.user.ID, "username": c.user.Username, "body": m.Body, "createdAt": now}))
 		r.mu.Unlock()

@@ -19,7 +19,7 @@ func mediaPath(d *sql.DB, id int64) (string, bool) {
 	return fp.String, status == "ready" && fp.Valid
 }
 
-func ServeRoutes(mux *http.ServeMux, d *sql.DB) {
+func ServeRoutes(mux *http.ServeMux, d *sql.DB, dataDir string) {
 	mux.HandleFunc("GET /api/media", auth.Require(d, false, func(w http.ResponseWriter, r *http.Request) {
 		u := auth.From(r)
 		q := `SELECT id, kind, title, status, COALESCE(duration,0), COALESCE(size_bytes,0), COALESCE(error,'') FROM media`
@@ -59,13 +59,14 @@ func ServeRoutes(mux *http.ServeMux, d *sql.DB) {
 			var it item
 			rows.Scan(&it.ID, &it.Kind, &it.Title, &it.Status, &it.Duration, &it.SizeBytes, &it.Error)
 			it.Subtitles = []sub{}
-			srows, _ := d.Query(`SELECT id, label FROM subtitles WHERE media_id=?`, it.ID)
-			for srows.Next() {
-				var s sub
-				srows.Scan(&s.ID, &s.Label)
-				it.Subtitles = append(it.Subtitles, s)
+			if srows, err := d.Query(`SELECT id, label FROM subtitles WHERE media_id=?`, it.ID); err == nil {
+				for srows.Next() {
+					var s sub
+					srows.Scan(&s.ID, &s.Label)
+					it.Subtitles = append(it.Subtitles, s)
+				}
+				srows.Close()
 			}
-			srows.Close()
 			out = append(out, it)
 		}
 		writeJSON(w, out)
@@ -112,13 +113,20 @@ func ServeRoutes(mux *http.ServeMux, d *sql.DB) {
 		if fp.Valid {
 			os.Remove(fp.String)
 		}
-		rows, _ := d.Query(`SELECT file_path FROM subtitles WHERE media_id=?`, id)
-		for rows.Next() {
-			var sp string
-			rows.Scan(&sp)
-			os.Remove(sp)
+		os.Remove(UploadPath(dataDir, id)) // partial/unprocessed upload blob
+		if sidecars, err := SubPaths(dataDir, id); err == nil {
+			for _, sp := range sidecars {
+				os.Remove(sp)
+			}
 		}
-		rows.Close()
+		if rows, err := d.Query(`SELECT file_path FROM subtitles WHERE media_id=?`, id); err == nil {
+			for rows.Next() {
+				var sp string
+				rows.Scan(&sp)
+				os.Remove(sp)
+			}
+			rows.Close()
+		}
 		d.Exec(`DELETE FROM subtitles WHERE media_id=?`, id)
 		d.Exec(`DELETE FROM jobs WHERE media_id=?`, id)
 		d.Exec(`DELETE FROM media WHERE id=?`, id)

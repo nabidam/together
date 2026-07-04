@@ -72,6 +72,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   error TEXT,
   created_at INTEGER NOT NULL DEFAULT (unixepoch())
 );
+CREATE INDEX IF NOT EXISTS idx_messages_room ON messages(room_id, id);
 `
 
 // Open opens (creating if needed) the SQLite database and applies the schema.

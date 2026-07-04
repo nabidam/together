@@ -26,7 +26,7 @@ func TestStreamSupportsRangeAndAuth(t *testing.T) {
 
 	mux := http.NewServeMux()
 	auth.Routes(mux, d)
-	ServeRoutes(mux, d)
+	ServeRoutes(mux, d, dir)
 	ts := httptest.NewServer(mux)
 	defer ts.Close()
 
@@ -90,7 +90,7 @@ func TestSubtitleGatingOnMediaReady(t *testing.T) {
 
 	mux := http.NewServeMux()
 	auth.Routes(mux, d)
-	ServeRoutes(mux, d)
+	ServeRoutes(mux, d, dir)
 	ts := httptest.NewServer(mux)
 	defer ts.Close()
 

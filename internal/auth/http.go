@@ -58,7 +58,7 @@ func Routes(mux *http.ServeMux, d *sql.DB) {
 
 	mux.HandleFunc("POST /api/login", func(w http.ResponseWriter, r *http.Request) {
 		var c creds
-		json.NewDecoder(r.Body).Decode(&c)
+		json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&c)
 		u, err := Login(d, c.Username, c.Password)
 		if err != nil {
 			http.Error(w, err.Error(), 401)
@@ -73,9 +73,9 @@ func Routes(mux *http.ServeMux, d *sql.DB) {
 
 	mux.HandleFunc("POST /api/register", func(w http.ResponseWriter, r *http.Request) {
 		var c creds
-		json.NewDecoder(r.Body).Decode(&c)
-		if len(c.Username) < 2 || len(c.Password) < 8 {
-			http.Error(w, "username min 2 chars, password min 8", 400)
+		json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&c)
+		if len(c.Username) < 2 || len(c.Username) > 32 || len(c.Password) < 8 {
+			http.Error(w, "username 2–32 chars, password min 8", 400)
 			return
 		}
 		u, err := Register(d, c.Code, c.Username, c.Password)
@@ -110,7 +110,11 @@ func Routes(mux *http.ServeMux, d *sql.DB) {
 	}))
 
 	mux.HandleFunc("GET /api/admin/invites", Require(d, true, func(w http.ResponseWriter, r *http.Request) {
-		rows, _ := d.Query(`SELECT code, used_by IS NOT NULL FROM invite_codes ORDER BY rowid DESC`)
+		rows, err := d.Query(`SELECT code, used_by IS NOT NULL FROM invite_codes ORDER BY rowid DESC`)
+		if err != nil {
+			http.Error(w, "server error", 500)
+			return
+		}
 		defer rows.Close()
 		type inv struct {
 			Code string `json:"code"`

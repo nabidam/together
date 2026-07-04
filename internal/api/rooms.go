@@ -23,7 +23,11 @@ func pathID(r *http.Request) int64 {
 // ponytail: room privacy/passwords deferred; add rooms.password_hash when >2 users actually want it
 func Routes(mux *http.ServeMux, d *sql.DB) {
 	mux.HandleFunc("GET /api/rooms", auth.Require(d, false, func(w http.ResponseWriter, r *http.Request) {
-		rows, _ := d.Query(`SELECT id, name, owner_id, created_at FROM rooms ORDER BY created_at DESC`)
+		rows, err := d.Query(`SELECT id, name, owner_id, created_at FROM rooms ORDER BY created_at DESC`)
+		if err != nil {
+			http.Error(w, "server error", 500)
+			return
+		}
 		defer rows.Close()
 		type room struct {
 			ID        int64  `json:"id"`
@@ -42,7 +46,7 @@ func Routes(mux *http.ServeMux, d *sql.DB) {
 
 	mux.HandleFunc("POST /api/rooms", auth.Require(d, false, func(w http.ResponseWriter, r *http.Request) {
 		var in struct{ Name string }
-		json.NewDecoder(r.Body).Decode(&in)
+		json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&in)
 		in.Name = strings.TrimSpace(in.Name)
 		if in.Name == "" || len(in.Name) > 60 {
 			http.Error(w, "name required (max 60 chars)", 400)
@@ -72,9 +76,13 @@ func Routes(mux *http.ServeMux, d *sql.DB) {
 	}))
 
 	mux.HandleFunc("GET /api/rooms/{id}/messages", auth.Require(d, false, func(w http.ResponseWriter, r *http.Request) {
-		rows, _ := d.Query(`SELECT m.id, m.user_id, u.username, m.body, m.created_at
+		rows, err := d.Query(`SELECT m.id, m.user_id, u.username, m.body, m.created_at
 			FROM messages m JOIN users u ON u.id=m.user_id
 			WHERE m.room_id=? ORDER BY m.id DESC LIMIT 50`, pathID(r))
+		if err != nil {
+			http.Error(w, "server error", 500)
+			return
+		}
 		defer rows.Close()
 		type msg struct {
 			ID        int64  `json:"id"`

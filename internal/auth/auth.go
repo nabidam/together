@@ -19,16 +19,28 @@ type User struct {
 
 var ErrBadLogin = errors.New("invalid username or password")
 
+// argon2id uses 64 MB per invocation; unbounded concurrent logins could OOM the
+// 2 GB box (systemd MemoryMax=1200M). Cap concurrent hashes at 2.
+var hashSem = make(chan struct{}, 2)
+
+func idKey(pw string, salt []byte) []byte {
+	hashSem <- struct{}{}
+	defer func() { <-hashSem }()
+	return argon2.IDKey([]byte(pw), salt, 1, 64*1024, 4, 32)
+}
+
 func Hash(pw string) (hash, salt []byte) {
 	salt = make([]byte, 16)
 	rand.Read(salt)
-	return argon2.IDKey([]byte(pw), salt, 1, 64*1024, 4, 32), salt
+	return idKey(pw, salt), salt
 }
 
 func Verify(pw string, hash, salt []byte) bool {
-	h := argon2.IDKey([]byte(pw), salt, 1, 64*1024, 4, 32)
-	return subtle.ConstantTimeCompare(h, hash) == 1
+	return subtle.ConstantTimeCompare(idKey(pw, salt), hash) == 1
 }
+
+// GC drops expired sessions. Called once at boot; the table stays tiny at ≤10 users.
+func GC(d *sql.DB) { d.Exec(`DELETE FROM sessions WHERE expires_at <= unixepoch()`) }
 
 // Seed creates an admin user if the users table is empty.
 func Seed(d *sql.DB, user, pass string) error {

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"together/internal/api"
 	"together/internal/auth"
@@ -57,6 +58,7 @@ func main() {
 	if err := auth.Seed(d, os.Getenv("ADMIN_USER"), os.Getenv("ADMIN_PASS")); err != nil {
 		log.Fatal(err)
 	}
+	auth.GC(d)
 
 	hub := live.NewHub(d)
 	if err := hub.Restore(); err != nil {
@@ -68,7 +70,7 @@ func main() {
 	auth.Routes(mux, d)
 	api.Routes(mux, d)
 	media.UploadRoutes(mux, d, dataDir)
-	media.ServeRoutes(mux, d)
+	media.ServeRoutes(mux, d, dataDir)
 	mux.HandleFunc("GET /ws/{id}", auth.Require(d, false, hub.Handle))
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })
 	spa(mux)
@@ -82,5 +84,7 @@ func main() {
 	addr := env("TOGETHER_ADDR", ":8080")
 	log.Println("listening on", addr)
 	// ponytail: no graceful HTTP drain; clients reconnect and resync by design
-	log.Fatal(http.ListenAndServe(addr, mux))
+	// ReadHeaderTimeout only — no write/idle timeouts, they would kill WS and long media streams
+	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	log.Fatal(srv.ListenAndServe())
 }

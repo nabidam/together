@@ -103,6 +103,40 @@ func TestProbeAndWorkerEndToEnd(t *testing.T) {
 	t.Fatal("worker never finished")
 }
 
+// TestProcessResumesAfterMoveCrash covers the narrow crash window where the
+// source blob was already moved/removed but the media row never flipped to
+// 'ready': a rerun must finish from dst instead of failing on the missing src.
+func TestProcessResumesAfterMoveCrash(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg not installed")
+	}
+	dir := t.TempDir()
+	d, _ := db.Open(filepath.Join(dir, "t.db"))
+	defer d.Close()
+
+	res, _ := d.Exec(`INSERT INTO media (kind, title, status) VALUES ('movie','Fixture','processing')`)
+	id, _ := res.LastInsertId()
+	os.MkdirAll(filepath.Join(dir, "media"), 0o755)
+	// dst already exists, src does not — as left by a crash right after the move
+	dst := filepath.Join(dir, "media", "1.mp4")
+	cmd := exec.Command("ffmpeg", "-y", "-f", "lavfi", "-i", "testsrc=duration=2:size=128x72:rate=10",
+		"-f", "lavfi", "-i", "sine=frequency=440:duration=2",
+		"-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", dst)
+	if b, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("fixture: %v\n%s", err, b)
+	}
+
+	if err := process(d, dir, id); err != nil {
+		t.Fatal("resume failed:", err)
+	}
+	var status string
+	var dur float64
+	d.QueryRow(`SELECT status, duration FROM media WHERE id=?`, id).Scan(&status, &dur)
+	if status != "ready" || dur < 1.5 {
+		t.Fatalf("status=%s dur=%v", status, dur)
+	}
+}
+
 // TestWorkerReclaimsOrphanedRunningJob covers the crash/restart case: a job
 // left status='running' by a killed process (Worker only polls 'pending')
 // must be picked back up on the next Worker start, not stranded forever.

@@ -124,11 +124,6 @@ func process(d *sql.DB, dataDir string, mediaID int64) error {
 		return err
 	}
 	src := UploadPath(dataDir, mediaID)
-	info, err := Probe(src)
-	if err != nil {
-		return err
-	}
-
 	ext := ".mp4"
 	if kind == "music" {
 		// ponytail: upload endpoint guarantees music orig_name has an extension; .mp4 fallback only reachable for movies
@@ -138,17 +133,26 @@ func process(d *sql.DB, dataDir string, mediaID int64) error {
 	}
 	dst := filepath.Join(dataDir, "media", strconv.FormatInt(mediaID, 10)+ext)
 
-	if args := Plan(kind, info); args == nil {
-		if err := os.Rename(src, dst); err != nil {
+	if _, statErr := os.Stat(src); statErr == nil {
+		info, err := Probe(src)
+		if err != nil {
 			return err
 		}
-	} else {
-		full := append([]string{"-y", "-i", src}, append(args, dst)...)
-		if err := run("ffmpeg", full...); err != nil {
-			return err
+		if args := Plan(kind, info); args == nil {
+			if err := os.Rename(src, dst); err != nil {
+				return err
+			}
+		} else {
+			full := append([]string{"-y", "-i", src}, append(args, dst)...)
+			if err := run("ffmpeg", full...); err != nil {
+				return err
+			}
+			os.Remove(src)
 		}
-		os.Remove(src)
+	} else if _, dstErr := os.Stat(dst); dstErr != nil {
+		return statErr // src gone and no output — upload truly missing
 	}
+	// src missing but dst present = crash after the move, before the status flip; finish from dst
 
 	// uploaded subtitle sidecars: <upload>.sub.N.<label>.srt → vtt
 	subs, _ := SubPaths(dataDir, mediaID)
@@ -168,6 +172,10 @@ func process(d *sql.DB, dataDir string, mediaID int64) error {
 	// ponytail: embedded mkv subtitle extraction deferred — sidecar .srt covers the stated V1 flow; add -map 0:s:N loop when an mkv with embedded subs actually shows up
 
 	fi, err := os.Stat(dst)
+	if err != nil {
+		return err
+	}
+	info, err := Probe(dst) // duration of the output, valid on both fresh and resumed runs
 	if err != nil {
 		return err
 	}

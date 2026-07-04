@@ -123,7 +123,11 @@ func UploadRoutes(mux *http.ServeMux, d *sql.DB, dataDir string) {
 			http.Error(w, "not found or already finished", 409)
 			return
 		}
-		d.Exec(`INSERT INTO jobs (media_id) VALUES (?)`, id)
+		if _, err := d.Exec(`INSERT INTO jobs (media_id) VALUES (?)`, id); err != nil {
+			d.Exec(`UPDATE media SET status='uploading' WHERE id=?`, id) // undo the flip; media would be stuck 'processing' with no job
+			http.Error(w, "server error", 500)
+			return
+		}
 		w.WriteHeader(202)
 	}))
 }
