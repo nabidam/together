@@ -76,6 +76,8 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go media.Worker(ctx, d, dataDir)
+	// ponytail: exit on signal, no HTTP drain; clients reconnect and resync by design
+	go func() { <-ctx.Done(); log.Println("shutting down"); os.Exit(0) }()
 
 	addr := env("TOGETHER_ADDR", ":8080")
 	log.Println("listening on", addr)
