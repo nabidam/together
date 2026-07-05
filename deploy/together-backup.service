@@ -1,0 +1,12 @@
+[Unit]
+Description=together DB backup (restic)
+After=network.target
+
+[Service]
+Type=oneshot
+User=together
+Environment=TOGETHER_DATA=/var/lib/together
+Environment=RESTIC_REPOSITORY=/var/backups/together
+Environment=RESTIC_PASSWORD_FILE=/etc/together-restic.pass
+ExecStart=/usr/local/bin/together-backup.sh
+Nice=19

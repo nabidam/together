@@ -36,7 +36,7 @@ Whole-codebase review for correctness/robustness gaps. Landed (all tested, gofmt
 
 | Item | Where | Why deferred |
 |------|-------|--------------|
-| **No backups** — DB + media live on one VPS disk; the single biggest operational gap | ops (VPS) | Litestream, or nightly cron `sqlite3 .backup` + rsync of `media/`. Ops task, not code — needs owner decision on destination |
+| **DB backup only, local repo** — nightly restic of the DB to a same-VPS repo (`deploy/backup.sh` + `together-backup.{service,timer}`) landed 2026-07-05. Protects against DB corruption / bad migration / accidental delete, **not VPS or disk loss**. Deferred: (a) **media backup** — `uploads/`+`media/` still unbacked; (b) **offsite destination** — point restic at B2/S3 or a second host (`RESTIC_REPOSITORY` + creds) so a lost VPS is recoverable | ops (VPS) | Owner picks offsite target + credentials; media is large blobs, add to the same restic run or a separate rsync when a destination exists |
 | ffmpeg has no timeout — one pathological file hangs the single worker until restart | `internal/media/pipeline.go` `run()` | Fix is `exec.CommandContext` + cap, but the right cap for a 2 h movie at `nice 19` is hours; owner picks the ceiling |
 | WS reconnect never gives up — expired session mid-room hammers reconnects every 1–8 s forever | `web/src/lib/ws.js` | On repeated failures, check `/api/me` and redirect to login |
 | No login rate limiting beyond the new hash semaphore | `internal/auth/http.go` | Invite-only private instance; argon2 already slow; add fail2ban at Caddy if wanted |
