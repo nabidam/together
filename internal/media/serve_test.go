@@ -22,7 +22,7 @@ func TestStreamSupportsRangeAndAuth(t *testing.T) {
 	auth.Seed(d, "admin", "password")
 	fp := filepath.Join(dir, "1.mp4")
 	os.WriteFile(fp, []byte("0123456789"), 0o644)
-	d.Exec(`INSERT INTO media (kind, title, status, file_path, size_bytes) VALUES ('movie','M','ready',?,10)`, fp)
+	d.Exec(`INSERT INTO media (kind, title, status, file_path, size_bytes) VALUES ('video','M','ready',?,10)`, fp)
 
 	mux := http.NewServeMux()
 	auth.Routes(mux, d)
@@ -47,11 +47,54 @@ func TestStreamSupportsRangeAndAuth(t *testing.T) {
 		t.Fatalf("want 206 got %d", r.StatusCode)
 	}
 
-	r, _ = c.Get(ts.URL + "/api/media?kind=movie")
+	r, _ = c.Get(ts.URL + "/api/media?kind=video")
 	var list []map[string]any
 	json.NewDecoder(r.Body).Decode(&list)
 	if len(list) != 1 || list[0]["title"] != "M" {
 		t.Fatalf("%+v", list)
+	}
+}
+
+// TestMediaKindFilterV2Vocabulary asserts the library filter speaks the V2
+// video|audio vocabulary (AC-1 task 1): kind=video/audio filter correctly and
+// the retired V1 value movie is not a valid discriminator (matches no rows).
+func TestMediaKindFilterV2Vocabulary(t *testing.T) {
+	dir := t.TempDir()
+	d, _ := db.Open(filepath.Join(dir, "t.db"))
+	defer d.Close()
+	auth.Seed(d, "admin", "password")
+	d.Exec(`INSERT INTO media (kind, title, status, file_path, size_bytes) VALUES ('video','V','ready','v.mp4',1)`)
+	d.Exec(`INSERT INTO media (kind, title, status, file_path, size_bytes) VALUES ('audio','A','ready','a.m4a',1)`)
+
+	mux := http.NewServeMux()
+	auth.Routes(mux, d)
+	ServeRoutes(mux, d, dir)
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	jar, _ := cookiejar.New(nil)
+	c := &http.Client{Jar: jar}
+	c.Post(ts.URL+"/api/login", "application/json", strings.NewReader(`{"username":"admin","password":"password"}`))
+
+	get := func(query string) []map[string]any {
+		r, _ := c.Get(ts.URL + "/api/media" + query)
+		var list []map[string]any
+		json.NewDecoder(r.Body).Decode(&list)
+		return list
+	}
+
+	if l := get("?kind=video"); len(l) != 1 || l[0]["kind"] != "video" {
+		t.Fatalf("kind=video should return only the video row, got %+v", l)
+	}
+	if l := get("?kind=audio"); len(l) != 1 || l[0]["kind"] != "audio" {
+		t.Fatalf("kind=audio should return only the audio row, got %+v", l)
+	}
+	// No stored row carries the retired movie vocabulary; the filter never
+	// surfaces one whatever the query.
+	for _, l := range append(get("?kind=video"), get("?kind=audio")...) {
+		if l["kind"] == "movie" || l["kind"] == "music" {
+			t.Fatalf("V1 vocabulary leaked into library: %+v", l)
+		}
 	}
 }
 

@@ -26,7 +26,7 @@ func ServeRoutes(mux *http.ServeMux, d *sql.DB, dataDir string) {
 		if u.Role != "admin" {
 			q += ` WHERE status='ready'`
 		}
-		if k := r.URL.Query().Get("kind"); k == "movie" || k == "music" {
+		if k := r.URL.Query().Get("kind"); k == "video" || k == "audio" {
 			if u.Role != "admin" {
 				q += ` AND kind='` + k + `'`
 			} else {
