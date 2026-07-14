@@ -1,124 +1,135 @@
-# FILE_STRUCTURE.md — Together (post-refactor, specs/001-core)
+# FILE_STRUCTURE.md — Together (post-V2, specs/001-core)
 
-Complete tree after executing `specs/001-core/PLAN.md`. Files marked **(new)** are created by
-the refactor; **(rewrite)** keep their path but change contents; unmarked files carry over.
-Files deleted by the refactor are listed at the bottom.
+Living document. Complete tree after executing `specs/001-core/PLAN.md`. **(new)** = created by V2; **(rewrite)** = path kept, contents substantially change; unmarked = carries over from shipped V1. Deletions at the bottom.
 
 ```text
 together/
 ├── .gitignore
-├── ARCHITECTURE.md                  # V1 architecture (source spec for this refactor)
-├── CLAUDE.md                        # (rewrite) agent guidance — commands/env updated
-├── CONVENTIONS.md                   # (new) naming, errors, folders, tests, commits
-├── FILE_STRUCTURE.md                # (new) this file
-├── README.md                        # (rewrite) run instructions, env vars
-├── build.sh                         # SPA build → embed → static binary
-├── design.md                        # NxCode design tokens (source of truth for UI)
-├── go.mod                           # (rewrite) single dep: github.com/coder/websocket
-├── go.sum                           # (rewrite)
+├── ARCHITECTURE.md                    # V2 technical truth (living)
+├── CLAUDE.md                          # (rewrite, chunk 9) agent guidance
+├── CONVENTIONS.md                     # (rewrite) naming, errors, folders, tests, commits
+├── DESIGN.md                          # (new) NxCode adoption map for shadcn-svelte
+├── FILE_STRUCTURE.md                  # (rewrite) this file
+├── README.md                          # (rewrite, chunk 9) run instructions, env vars
+├── UX.md                              # screens S1–S7, M1–M4, V1 view, flows F1–F4
+├── build.sh                           # SPA build → webdist → static binary ./together
+├── design.md                          # NxCode design system — single token source
+├── go.mod                             # exactly: coder/websocket, modernc.org/sqlite, x/crypto
+├── go.sum
 │
-├── cmd/
-│   └── server/
-│       ├── main.go                  # (rewrite) env config, mux, graceful shutdown
-│       └── webdist/
-│           └── index.html           # committed placeholder — never commit built output
+├── cmd/server/
+│   ├── main.go                        # (rewrite) env (+TOGETHER_ROOM_IDLE), mux: live routes,
+│   │                                  #   RequireRoom wiring, embedded SPA + fallback
+│   └── webdist/
+│       └── index.html                 # committed placeholder — never commit built output
 │
 ├── internal/
-│   ├── api/
-│   │   ├── rooms.go                 # (rewrite) POST /api/rooms, GET /api/media, GET /media/{id}
-│   │   └── rooms_test.go            # (rewrite) httptest: create, list, Range/206, 404
-│   ├── catalog/
-│   │   ├── catalog.go               # (new) STATIC_MEDIA_PATH scan → items, id→path resolve
-│   │   └── catalog_test.go          # (new)
+│   ├── auth/
+│   │   ├── auth.go                    # argon2id, account sessions, invite codes
+│   │   ├── auth_test.go
+│   │   ├── http.go                    # login/register/logout/me, Require middleware
+│   │   └── http_test.go
+│   ├── db/
+│   │   ├── db.go                      # (rewrite) idempotent DDL + V2 cutover
+│   │   │                              #   (drops rooms/messages/activities; kind → video|audio)
+│   │   └── db_test.go                 # (rewrite) cutover idempotence
 │   ├── live/
-│   │   ├── hub.go                   # (rewrite) WS protocol, fan-out, roles, migration, culling
-│   │   ├── hub_test.go              # (rewrite) real WS dial tests per event family
-│   │   ├── integration_test.go      # (new) full-stack scenario suite (Chunk 14)
-│   │   ├── watch.go                 # playback state machine (Apply/PositionAt) — reused
-│   │   └── watch_test.go            # reused, untouched
-│   └── state/
-│       ├── state.go                 # (new) Room/User/Stroke, Store, indices, limits
-│       └── state_test.go            # (new)
+│   │   ├── watch.go                   # pure sync state machine — unchanged
+│   │   ├── watch_test.go              # unchanged (most-tested unit; keep it that way)
+│   │   ├── hub.go                     # (rewrite) in-memory rooms, WS frames (hello/presence/
+│   │   │                              #   status/room_closed), chat ring, empty timer,
+│   │   │                              #   per-room recover; checkpointing deleted
+│   │   ├── hub_test.go                # (rewrite) WS-dial protocol + timer + panic tests
+│   │   ├── rooms.go                   # (new) room lifecycle HTTP, guest sessions, join,
+│   │   │                              #   token regenerate, RequireRoom middleware
+│   │   └── rooms_test.go              # (new)
+│   └── media/
+│       ├── upload.go                  # (rewrite) kind from probe, not client
+│       ├── upload_test.go
+│       ├── pipeline.go                # (rewrite) + audio branch (move-as-is / -c:a aac)
+│       ├── pipeline_test.go           # (rewrite) + lavfi audio fixtures
+│       ├── serve.go                   # (rewrite) room-auth media routes, /download,
+│       │                              #   /api/rooms/{id}/meta helper, kind filter video|audio
+│       └── serve_test.go              # (rewrite)
 │
 ├── deploy/
-│   ├── Caddyfile                    # TLS termination + reverse proxy
-│   └── together.service             # (rewrite) systemd unit — new env, no DB/backup refs
+│   ├── Caddyfile                      # TLS termination + reverse proxy
+│   ├── together.service               # systemd unit
+│   ├── backup.sh                      # nightly restic DB backup
+│   ├── together-backup.service
+│   └── together-backup.timer
 │
 ├── docs/
-│   ├── debt.md                      # deferred-work ledger
-│   ├── research/
-│   │   └── 2026-07-03-prior-art-and-process.md
-│   └── superpowers/
-│       ├── plans/
-│       │   └── 2026-07-03-together-v1.md
-│       └── specs/
-│           └── 2026-07-03-together-app-design.md
+│   ├── research/2026-07-03-prior-art-and-process.md
+│   └── superpowers/specs/2026-07-03-together-app-design.md   # V1 spec (historical)
 │
-├── specs/
-│   └── 001-core/
-│       ├── PRD.md                   # product requirements (source spec)
-│       └── PLAN.md                  # (new) ordered refactor chunks
+├── specs/001-core/
+│   ├── SPEC.md                        # V2 spec (+§9 resolved decisions)
+│   ├── PRD.md                         # product requirements (FR/NFR/AC)
+│   ├── PLAN.md                        # (new) 9 chunks, 4 demo gates
+│   └── TASKS.md                       # (phase 4 output — not yet written)
 │
 └── web/
     ├── index.html
-    ├── package.json
+    ├── package.json                   # (rewrite) + shadcn-svelte (accepted V2 ceiling)
     ├── package-lock.json
+    ├── components.json                # (new) shadcn config; ui alias → src/components/ui
     ├── vite.config.js
     ├── public/
     │   ├── icon.svg
     │   └── manifest.webmanifest
     └── src/
-        ├── App.svelte               # (rewrite) hash-route switch Home/Room, no auth gate
-        ├── app.css                  # design tokens via @theme — unchanged rules
         ├── main.js
+        ├── App.svelte                 # (rewrite) #/join/{token} before the /api/me gate
+        ├── app.css                    # (rewrite) @theme from design.md + shadcn var map
+        │                              #   (+--radius-pill, --duration-*); V1 primitives deleted
+        ├── pages/
+        │   ├── Login.svelte           # (rewrite) S1, shadcn
+        │   ├── Register.svelte        # (new) S2, split out of Login
+        │   ├── Home.svelte            # (new) S3 — renamed from Rooms.svelte
+        │   ├── Room.svelte            # (rewrite) S4/S5 shell: WS owner, kind switch
+        │   ├── JoinGuest.svelte       # (new) S6 + terminal invalid/full states
+        │   └── Admin.svelte           # (rewrite) S7 + kind column
         ├── components/
-        │   ├── Canvas.svelte        # (new) drawing surface + toolbar + export + clear
-        │   ├── Chat.svelte          # (rewrite) CHAT_MESSAGE/CHAT_BROADCAST, temp names
-        │   ├── JoinGate.svelte      # (new) display-name prompt + validation
-        │   ├── Participants.svelte  # (new) list, status badges, host controls
-        │   ├── Player.svelte        # (rewrite) local-file playback, download, mismatch, drift
-        │   └── SidePanel.svelte     # (new) collapsible panel (participants + chat)
-        ├── lib/
-        │   ├── api.js               # (rewrite) createRoom, getMedia only
-        │   ├── canvas.js            # (new) stroke buffer, 50ms batching, normalization
-        │   ├── canvas.test.js       # (new) node --test
-        │   ├── router.svelte.js     # 8-line hash router — reused
-        │   ├── sync.js              # (rewrite) PositionAt mirror, drift threshold 1.5s
-        │   ├── sync.test.js         # (rewrite) clamp + threshold cases
-        │   └── ws.js                # (rewrite) backoff, EMA offset, JOIN_ROOM, typed sends
-        └── pages/
-            ├── Home.svelte          # (new) create room, invite link
-            └── Room.svelte          # (rewrite) theater layout, offline overlay, wiring
+        │   ├── ui/…                   # (new, generated) shadcn-svelte primitives — vendor
+        │   ├── MediaPickerDialog.svelte  # (new) M1
+        │   ├── RoomStrip.svelte       # (new) leave / title / HOST badge / Room menu
+        │   ├── RoomMenu.svelte        # (new) copy link · regenerate · end
+        │   ├── EndRoomDialog.svelte   # (new) M2
+        │   ├── RegenerateLinkDialog.svelte  # (new) M3
+        │   ├── PlayFromServerDialog.svelte  # (new) M4
+        │   ├── AcquisitionPanel.svelte      # (new) UX §3.4 incl. mismatch state
+        │   ├── Player.svelte          # (rewrite) blob: src, arm overlay, drift loop
+        │   ├── AudioPlayer.svelte     # (new) S5 now-playing
+        │   ├── SidePanel.svelte       # (new) collapsible; participants + chat
+        │   ├── Participants.svelte    # (new) dot ladder + tooltips
+        │   ├── Chat.svelte            # (rewrite) ring-buffer history from hello
+        │   └── RoomClosed.svelte      # (new) V1 terminal view
+        └── lib/
+            ├── router.svelte.js       # 8-line hash router — unchanged
+            ├── ws.js                  # (rewrite) backoff, EMA offset, V2 frames
+            ├── sync.js                # PositionAt mirror — unchanged (lockstep w/ watch.go)
+            ├── sync.test.js           # unchanged
+            ├── localfile.js           # (new) size check + objectURL helpers
+            ├── localfile.test.js      # (new)
+            ├── api.js                 # (rewrite) + rooms/join/meta wrappers
+            └── upload.js              # resumable upload client (kind field dropped)
 ```
 
-## Deleted by this refactor (Chunk 13)
+## Deleted by V2
 
 ```text
-internal/auth/auth.go                # accounts/sessions — out of scope (PRD §8)
-internal/auth/auth_test.go
-internal/auth/http.go
-internal/auth/http_test.go
-internal/db/db.go                    # SQLite — state is memory-bound (PRD §7)
-internal/db/db_test.go
-internal/media/pipeline.go           # ffmpeg pipeline — no server-side transcoding
-internal/media/pipeline_test.go
-internal/media/serve.go              # replaced by internal/catalog + /media/{id}
-internal/media/serve_test.go
-internal/media/upload.go             # admin uploads — media is provisioned out-of-band
-internal/media/upload_test.go
-web/src/lib/upload.js
-web/src/pages/Admin.svelte
-web/src/pages/Login.svelte
-web/src/pages/Rooms.svelte
-deploy/backup.sh                     # nothing left to back up
-deploy/together-backup.service
-deploy/together-backup.timer
+internal/api/rooms.go                  # DB-backed rooms → internal/live/rooms.go (chunk 1)
+internal/api/rooms_test.go
+web/src/pages/Rooms.svelte             # renamed → pages/Home.svelte (chunk 4)
+.btn-primary / .btn-ghost / .input     # app.css primitives, retired for shadcn (chunk 7)
+rooms / messages / activities          # SQLite tables, dropped at boot cutover (chunk 1)
 ```
 
 ## Runtime artifacts (never committed)
 
 ```text
-cmd/server/webdist/*                 # built SPA (gitignored except placeholder index.html)
-together                             # static binary from build.sh
-media/                               # STATIC_MEDIA_PATH default — operator-provisioned files
+cmd/server/webdist/*                   # built SPA (gitignored except placeholder index.html)
+together                               # static binary from build.sh
+data/                                  # SQLite (WAL) + media files under TOGETHER_DATA
 ```

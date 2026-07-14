@@ -1,302 +1,191 @@
-# PLAN.md — Together V1 Refactor (specs/001-core)
+---
+status: gate-passed
+---
 
-Refactor of the existing Go monolith (accounts + SQLite + server-hosted streaming) into the
-ephemeral, in-memory, local-playback product defined by `specs/001-core/PRD.md` and
-`ARCHITECTURE.md`.
+# PLAN.md — Together V2: Ephemeral Rooms + Local Playback
 
-## Ground rules for every chunk
+Implementation plan for the V2 refactor. Sources: `specs/001-core/SPEC.md` (§9 resolved decisions bind), `specs/001-core/PRD.md` (FR/NFR/AC ids referenced), `ARCHITECTURE.md`, `UX.md`, `DESIGN.md`, `CONVENTIONS.md`. Executes against the shipped V1 codebase — chunks name real files.
 
-- Max ~300 lines of **new** code per chunk (deletions are free).
-- Every chunk ends with a git commit (message given per chunk, conventional style).
-- `gofmt -l internal cmd` must be empty and `go test ./...` green before each commit.
-- After any `npm run build`: `git restore cmd/server/webdist/index.html` before committing.
-- UI tokens only from `design.md` via `@theme` in `web/src/app.css`. No raw hex.
+**Milestone A (chunks 1–5) is the walking skeleton:** the thinnest end-to-end slice that makes the kernel journey (UX F1) pass in the real app. Ugly is fine (V1 CSS primitives allowed until chunk 6), fake is not (real guest sessions, real local-file playback, real teardown). Chunks 6–9 deepen it.
 
-## Spec deviations (decided up front, applied throughout)
-
-| # | Spec says | We do | Why |
-|---|-----------|-------|-----|
-| D1 | ARCHITECTURE §6: Node.js signaling server | Keep Go binary (`coder/websocket`) | Refactor of existing codebase; Go hub already proven |
-| D2 | ARCHITECTURE §4.1: JWT `hostToken` | `crypto/rand` 32-hex token stored on Room | No JWT dep allowed; token is ephemeral anyway |
-| D3 | ARCHITECTURE §1: Nginx/CDN static server | `http.ServeFile` from `STATIC_MEDIA_PATH` in same binary (behind Caddy) | ARCH §2.2 permits "simple HTTP module"; Range/206 free from stdlib |
-| D4 | ARCHITECTURE §4.2: `MEDIA_ACTION` Host-only | Any participant may send it | PRD §2.2 story: "when **anyone** in the room clicks play…". PRD wins. Gate behind one `const hostOnlyMedia = false` for cheap flip |
-| D5 | ARCHITECTURE §7.3: `SYNC_REQUEST` on reconnect | No such event; `ROOM_STATE_SYNC` carries users + canvas + recent chat (ring buffer, last 200) | Stateless hello-style recovery already proven in current hub; strictly simpler |
-| D6 | ARCHITECTURE §4.2 has no host "select media" event | Add `MEDIA_SELECT: {mediaId}` (client→server, Host-only) and `MEDIA_SELECTED: {mediaId}` (server→client) | PRD §2.2 requires it; contract gap |
-| D7 | — | SQLite, argon2id, sessions, invites, upload pipeline, ffmpeg all deleted; `go.mod` shrinks to `github.com/coder/websocket` only | PRD §7 memory-bound state, §8 out-of-scope accounts/streaming |
-
-## What survives the refactor (reuse, don't rewrite)
-
-- `internal/live/watch.go` — pure playback state machine (`WatchState`, `Apply`, `PositionAt`) and its test suite. `MEDIA_ACTION` maps directly onto existing intents.
-- `web/src/lib/sync.js` — the JS mirror of `PositionAt` + tests. Change threshold only.
-- `web/src/lib/ws.js` — reconnect/backoff + EMA clock offset (ping every 10s, `serverTime` ms).
-- `web/src/lib/router.svelte.js`, `App.svelte` shell, `app.css` tokens, embed via `//go:embed`.
-- Hub skeleton in `internal/live/hub.go` — per-room mutex, fan-out, join/leave plumbing.
+Every chunk: builds, `go test ./...` green, `gofmt -l internal cmd` empty, one commit. Max ~300 new lines of code per chunk (shadcn-generated `components/ui/` files excluded from the budget).
 
 ---
 
-## Phase 1 — Setup / State (in-memory replaces DB)
+## Chunk 1 — DB cutover + rooms move into the hub
 
-### Chunk 1: in-memory room store
-
-**Files:** `internal/state/state.go` (new), `internal/state/state_test.go` (new)
+**Files:** `internal/db/db.go`, `internal/db/db_test.go`, `internal/live/rooms.go` (new), `internal/live/rooms_test.go` (new), `internal/live/hub.go`, `internal/live/hub_test.go`, `internal/media/serve.go`, `cmd/server/main.go`; **delete** `internal/api/` (both files).
 
 **Requirements:**
-- Structs per ARCHITECTURE §3.1: `Room` (id, hostID, mediaID, canvasState []Stroke, recentChat ring, createdAt, kicked set), `User` (id, roomID, displayName, role, status, playbackTime, lastPing, joinedAt), `Stroke` (userID, points [][2]float64, color, width).
-- `Store` with one `sync.RWMutex` guarding maps `rooms`, `users`, `usersByRoom` (ARCH §3.2 indices). `// ponytail: one global lock, per-room locks if >10 rooms ever hurts`.
-- `CreateRoom() (roomID, hostToken)` — 12-char base32 room id, 32-hex host token (D2).
-- `Join(roomID, displayName, hostToken)` — validates name (trimmed, 2–32 chars, `^\S(.*\S)?$`), enforces `MAX_ROOM_SIZE`, rejects kicked user IDs, assigns HOST iff token matches else GUEST, first-ever joiner with valid token is host.
-- `Leave`, `Promote`, `Kick` (adds to room kicked set), `SetStatus`, `SetMedia`, `AppendStrokes` (cap total stored strokes, e.g. 10k, drop-oldest), `ClearCanvas`, `AppendChat` (ring 200), `OldestUser(roomID)` for migration, `DeleteRoomIfEmpty`.
-- Table-driven tests: name validation edges, capacity, kick-block, promote, oldest-user ordering, chat ring wrap.
+- `db.go`: after the idempotent DDL, run the idempotent V2 cutover — `DROP TABLE IF EXISTS rooms; DROP TABLE IF EXISTS messages; DROP TABLE IF EXISTS activities;` plus kind-vocabulary normalization `UPDATE media SET kind='video' WHERE kind='movie'; UPDATE media SET kind='audio' WHERE kind='music';` (ARCHITECTURE §3.1). Remove the migration-note ponytail comment (this is the migration).
+- `internal/live/rooms.go`: `Room` struct per ARCHITECTURE §3.2 (`id`, `name`, `ownerID`, `mediaID`, `kind`, `joinToken`, `watch WatchState`, `clients`, `emptyTimer` — timer unused until chunk 3, chat ring until chunk 3). Room ids and join tokens from the same crypto-random generator as `internal/auth` session tokens (ids 16 hex chars, tokens ≥128-bit hex).
+- HTTP handlers in `rooms.go`, mounted in `main.go` under `auth.Require` (account): `GET /api/rooms` (live rooms from hub: `{id,name,mediaId,mediaTitle,kind,participants}`), `POST /api/rooms` (`{mediaId,name?}` → 201 `{id,joinToken}`; media must be status `ready`, 404 otherwise; name ≤64 chars, defaults to media title; creates the room **and** starts its watch activity), `DELETE /api/rooms/{id}` (host-only → 403; teardown v0: close sockets, delete from map), `POST /api/rooms/{id}/token` (host-only regenerate; old token dead for new joins).
+- `hub.go`: delete `state_json` checkpointing on intents and the boot-time activity reclaim; `WatchState` now lives on the hub's `Room`. Keep the per-room mutex discipline.
+- `serve.go`: kind query filter accepts `video|audio` (was `movie|music`).
 
-**Acceptance:** `go test ./internal/state/ -v` green; zero SQLite imports; no goroutines in this package (pure data + lock).
+**Acceptance (falsifiable):**
+- Boot against a V1 database file: no error; `rooms`/`messages`/`activities` tables gone; `media.kind` values are only `video`/`audio`; second boot also clean (idempotence test).
+- httptest: create room → 201 with id + joinToken; list shows it with media title; non-host DELETE → 403; host DELETE → gone from list.
+- Restart the process with a room live: room gone, media/accounts/sessions intact (seed of AC-5.6).
 
-**Do NOT:** touch `internal/db` yet (deleted in Chunk 13); add persistence of any kind; add per-room locks; export the mutex.
-
-**Commit:** `feat: in-memory ephemeral room store (state pkg)`
-
-### Chunk 2: config + media catalog
-
-**Files:** `cmd/server/main.go` (edit), `internal/catalog/catalog.go` (new), `internal/catalog/catalog_test.go` (new)
-
-**Requirements:**
-- Env config per ARCHITECTURE §8, read once in `main()` into a plain struct: `TOGETHER_ADDR` (keep, maps PORT), `MAX_ROOM_SIZE` (50), `PING_INTERVAL` (10000), `CANVAS_BATCH_RATE` (50), `STATIC_MEDIA_PATH` (default `./media`), `MAX_SERVER_MEMORY_MB` (1800). Drop `TOGETHER_DATA`, `ADMIN_USER`, `ADMIN_PASS`.
-- `catalog.Scan(dir)` → `[]Item{ID, Filename, SizeBytes, URL}`; ID = hex of filename hash; URL = `/media/{id}`; extensions allowlist (mp4, mkv, webm, mp3, m4a, srt, vtt). Rescan on each `GET /api/media` call — `// ponytail: rescan per request, cache if catalog grows past ~1k files`.
-- `catalog.Path(dir, id)` resolves id → absolute file path, rejects unknown ids (no path traversal possible since ids are hashes).
-- Tests with `t.TempDir()` fixture files.
-
-**Acceptance:** `Scan` returns correct sizes/urls; unknown id → error; hidden/dot files and unknown extensions excluded.
-
-**Do NOT:** watch the filesystem (fsnotify — new dep, banned); read media file contents; keep any admin seeding code path alive beyond compile.
-
-**Commit:** `feat: env config + static media catalog scanner`
+**Do NOT:** touch guest auth, chat, presence, timers, watch.go, or any frontend file. Do not add a migration framework.
 
 ---
 
-## Phase 2 — Backend routes
+## Chunk 2 — Guest sessions, join surface, RequireRoom
 
-### Chunk 3: HTTP endpoints
+**Files:** `internal/live/rooms.go` + test, `internal/media/serve.go` + test, `cmd/server/main.go`.
 
-**Files:** `internal/api/rooms.go` (rewrite), `internal/api/rooms_test.go` (rewrite), `cmd/server/main.go` (edit)
+**Requirements (SPEC §9.1, §9.10, §9.11; ARCHITECTURE §4.3–4.4):**
+- Hub gains `guests map[guestCookieToken]*GuestSession` (`guestID`, `roomID`, `name`); sessions die at room teardown, survive socket drops.
+- `POST /api/rooms/join` (public): `{token,name}` → 200 `{roomId}` + `together_guest` cookie (HttpOnly, SameSite=Lax, Secure when TLS-terminated — same detection as `auth`). Validation: strip control chars, 1–32 chars (400); token must match a **live** room (404, same body as unknown room — no oracle); participant cap 12 (409). Name collision against currently-connected names → suffix `(2)`, `(3)`; a request carrying a live guest cookie for that room short-circuits: same identity returned, no new session, no re-suffix (FR-5).
+- `GET /api/rooms/join/{token}` (public): → `{roomName}` / 404 — the S6 pre-join peek.
+- `GET /api/rooms/{id}/meta` (room auth): → `{name, kind, media:{id,title,sizeBytes,duration}, subtitles:[{id,label}]}`.
+- `live.RequireRoom` middleware: passes an account session **or** a guest session whose `roomID` matches the target room; for guests, media routes additionally require `{id}` == their room's `mediaID`. Rewire to it: `GET /ws/{roomId}`, `GET /media/{id}/stream`, `GET /media/{id}/subs/{sid}`; add `GET /media/{id}/download` = `http.ServeFile` + `Content-Disposition: attachment`.
 
-**Requirements:**
-- `POST /api/rooms` → `201 {roomId, hostToken}` (ARCH §4.1). Before create: `runtime.ReadMemStats`; if heap > `MAX_SERVER_MEMORY_MB`, `503`. No auth.
-- `GET /api/media` → `200 [{id, filename, sizeBytes, url}]`. No auth.
-- `GET /media/{id}` → `http.ServeFile` (Range free). No auth (D3 — files are the point of the download model).
-- Remove every `auth.Require` wrapper from mux; delete `/api/login`, `/api/me`, `/api/register`, `/api/invites`, upload routes from `main.go` route table (packages die in Chunk 13).
-- httptest coverage: create room shape, media list, 206 Range request, unknown media id → 404.
+**Acceptance:**
+- Table tests: name strip/length/suffix/re-suffix-on-reconnect/freed-name-after-departure; cap 12 → 409; dead vs unknown token bodies byte-identical.
+- httptest: guest cookie downloads its room's media (200/206 with Range); any other media id → 404; no cookie → 401. After regenerate, old token join → 404, new token → 200, previously-joined guest cookie still valid.
 
-**Acceptance:** `curl --noproxy '*'` smoke on `:18080`: create room, list media, download with `Range: bytes=0-99` → 206.
-
-**Do NOT:** add rate limiting, CORS config, or TLS handling (Caddy's job); return file paths in JSON (only `/media/{id}` urls).
-
-**Commit:** `refactor: unauthenticated ephemeral HTTP API (rooms, media catalog, downloads)`
-
-### Chunk 4: WS core protocol
-
-**Files:** `internal/live/hub.go` (rewrite), `internal/live/hub_test.go` (rewrite)
-
-**Requirements:**
-- `GET /ws/{roomId}` unauthenticated. First client frame MUST be `JOIN_ROOM {roomId, displayName, hostToken?}` within 5s, else close.
-- Envelope: `{"type": "...", ...payload}` — SCREAMING_SNAKE types exactly per ARCHITECTURE §4.2.
-- On join: `state.Join`; reply `ROOM_STATE_SYNC {users, hostId, mediaId, currentCanvas, recentChat}` (D5); broadcast `USER_JOINED {user}` to others.
-- Handle `CHAT_MESSAGE` → append to ring → broadcast `CHAT_BROADCAST {messageId, userId, displayName, content, timestamp}` (timestamp unix **seconds**, keep existing convention).
-- Handle `UPDATE_STATUS` (validate enum) → broadcast `USER_UPDATED {userId, status, role}`.
-- Keep ping/pong with `serverTime` unix **ms** (existing clock-sync contract). Update `lastPing` on any inbound frame.
-- On disconnect: `state.Leave`, broadcast `USER_LEFT {userId}` (host migration wired in Chunk 7 — for now host just leaves).
-- Unknown type / malformed JSON → `ERROR {code, message}`, connection stays open.
-- Tests: real WS dials via httptest — join handshake, name rejection, two-client chat fan-out, state sync on second join.
-
-**Acceptance:** two `websocket.Dial` clients exchange chat; reconnecting client gets full `ROOM_STATE_SYNC`; bad first frame closes conn.
-
-**Do NOT:** persist anything; implement media/canvas/manage events yet; break the ms/seconds time-unit split; add event replay.
-
-**Commit:** `refactor: ephemeral WS protocol — join, state sync, chat, status`
-
-### Chunk 5: media sync
-
-**Files:** `internal/live/hub.go` (edit), `internal/live/watch.go` (edit, minimal), `internal/live/hub_test.go` (edit)
-
-**Requirements:**
-- `MEDIA_SELECT {mediaId}` — Host-only (D6): validate id against catalog, `state.SetMedia`, broadcast `MEDIA_SELECTED {mediaId}`, reset `WatchState`.
-- `MEDIA_ACTION {action: PLAY|PAUSE|SEEK, timestamp}` — any participant (D4, `hostOnlyMedia` const). Map to existing `watch.Apply` intents under the room lock; broadcast `MEDIA_SYNC {action, timestamp, hostId}` where `timestamp` is the server-projected absolute position (`PositionAt`).
-- `WatchState` lives on the in-memory Room (no more `state_json` checkpoint — table is gone).
-- Reject `MEDIA_ACTION` when room has no selected media → `ERROR`.
-- Tests: select→play→projected position advances; SEEK rebroadcast absolute; guest PLAY accepted (D4); MEDIA_SELECT from guest → `ERROR`.
-
-**Acceptance:** `go test ./internal/live/ -v` green including untouched `watch_test.go`.
-
-**Do NOT:** modify `PositionAt` math (JS mirror!); let clients set arbitrary rate; checkpoint to any storage.
-
-**Commit:** `feat: room media selection + synced playback intents over WS`
-
-### Chunk 6: canvas events
-
-**Files:** `internal/live/hub.go` (edit), `internal/live/hub_test.go` (edit)
-
-**Requirements:**
-- `CANVAS_DRAW {points, color, width}`: validate — ≤100 points per payload (ARCH §3.2), raw frame ≤1KB (ARCH §7.5), finite coords, width 1–64, color matches `^#[0-9a-fA-F]{6}$`. Valid → `state.AppendStrokes` + broadcast `CANVAS_UPDATE {userId, points, color, width}` to **others** (sender rendered optimistically, PRD §3).
-- Oversized/malformed payloads: drop silently (ARCH §7.5 — no ERROR spam at 20 fps).
-- `CANVAS_CLEAR {}` — Host-only → `state.ClearCanvas` + broadcast `CANVAS_CLEARED {}` to all.
-- Tests: batch >100 points dropped; >1KB frame dropped; clear by guest → `ERROR`; late joiner receives strokes in `ROOM_STATE_SYNC.currentCanvas`.
-
-**Acceptance:** two-client test: A draws, B receives `CANVAS_UPDATE`, C joins late and gets full canvas.
-
-**Do NOT:** echo strokes back to sender; store strokes anywhere but the Room struct; add smoothing/interpolation server-side (client concern).
-
-**Commit:** `feat: batched collaborative canvas over WS with payload limits`
-
-### Chunk 7: roles, kick, host migration, culling
-
-**Files:** `internal/live/hub.go` (edit), `internal/state/state.go` (edit), `internal/live/hub_test.go` (edit)
-
-**Requirements:**
-- `MANAGE_USER {targetUserId, action: PROMOTE|KICK}` — Host-only. PROMOTE → target becomes HOST, old host becomes GUEST, broadcast `USER_UPDATED` for both. KICK → send `KICKED {reason}`, close socket, add to room kicked set (blocked for session lifetime, PRD §2.1), broadcast `USER_LEFT`.
-- Host disconnect: start 5s timer (ARCH §7.4). If host's userID not back by then → promote `state.OldestUser` (by joinedAt), broadcast `USER_UPDATED`. Reconnect within grace cancels timer (rejoin carries hostToken → still host).
-- Dead-connection culling: per-room ticker (interval = `PING_INTERVAL`×3); users with stale `lastPing` are force-disconnected → normal leave path.
-- Empty-room GC: last user gone → delete room after 60s grace. `// ponytail: fixed 60s grace, make configurable if anyone asks`.
-- Tests: kick blocks re-join; promote swaps roles; host drop → oldest inherits after grace (use short test grace via injected duration); empty room reaped.
-
-**Acceptance:** migration test passes deterministically (injectable clock/durations, no `time.Sleep` slop beyond grace).
-
-**Do NOT:** persist kick lists; migrate host to most-recent user (spec says **oldest**); leak timers (every timer stopped on room delete — test it).
-
-**Commit:** `feat: host controls, migration on disconnect, dead-conn culling, room GC`
+**Do NOT:** change any WS frame yet. No frontend. No rate limiter (unguessability is the rate limiter, SPEC §9.11).
 
 ---
 
-## Phase 3 — Frontend scaffolding
+## Chunk 3 — WS protocol V2: hello, presence + status, chat ring, teardown, timer, recover
 
-### Chunk 8: client plumbing for new protocol
+**Files:** `internal/live/hub.go` + test, `internal/live/rooms.go` + test, `cmd/server/main.go`.
 
-**Files:** `web/src/lib/api.js` (rewrite), `web/src/lib/ws.js` (edit), `web/src/lib/router.svelte.js` (edit if needed), `web/src/App.svelte` (edit), `web/src/lib/sync.js` (edit), `web/src/lib/sync.test.js` (edit)
+**Requirements (ARCHITECTURE §4.5, §5; SPEC §9.4–9.6):**
+- Outbound `hello` on connect: `{you:{name,isHost,isGuest}, users:[…], activity, chat:[…], room:{name,kind,mediaId}}` — full stateless recovery, no event replay. `isHost` computed live: connection's account userID == room `ownerID`.
+- Server-owned `presence` broadcast (`{users:[{name,isHost,isGuest,status}]}`) on join/leave/status change. Inbound `status` frame (`downloading|file_ready|in_sync`) updates the client's presence entry only — it must never enter the `intent`/`watch.Apply` path.
+- Chat: per-room 200-entry ring buffer, drop-oldest; inbound `chat` ≤2000 chars, non-empty; outbound `{name,isGuest,body,createdAt}` with `createdAt` unix **seconds**; no DB writes anywhere. Delete V1's chat persistence.
+- One teardown path (host end, timer fire, panic — under hub lock): broadcast `room_closed` → close sockets → cancel timer → delete room → drop its guest sessions → token forgotten. `DELETE /api/rooms/{id}` now routes through it.
+- Empty timer: last WS close → `emptyTimer.Reset(idle)`; any join → `Stop()`; fire → teardown. A cookie'd-but-disconnected guest does not keep the room warm. `idle` from `TOGETHER_ROOM_IDLE` env (Go duration, default `30m`), read once in `main`.
+- Per-room `recover()` in every goroutine that touches a room: log with room id → tear down that room → process keeps serving (NFR-7 — load-bearing now that checkpointing is gone).
 
-**Requirements:**
-- `api.js`: only `createRoom()` and `getMedia()`. Delete session/login/invite calls.
-- Routes: `#/` → Home, `#/r/{roomId}` → Room. App.svelte drops the `/api/me` gate — no auth.
-- `ws.js`: keep backoff (1s, 2s, 4s, 8s… cap 30s) and EMA offset; on (re)open, send `JOIN_ROOM` from stored identity; expose typed send helpers (`sendChat`, `sendMediaAction`, `sendCanvasDraw`, …); surface `connected` state for the offline overlay.
-- Identity: `sessionStorage` per-tab — `displayName`, and `hostToken` keyed by roomId (host refresh keeps host role through the 5s grace).
-- `sync.js`: drift threshold 1.5s (PRD §6) replacing 1s; keep `PositionAt` mirror byte-compatible with Go; update tests.
+**Acceptance:**
+- WS-dial tests: two clients; status change on one → `presence` on both; 210 chats → fresh dial's `hello` carries exactly the latest 200; reconnect `hello` carries activity + chat.
+- Timer test with `TOGETHER_ROOM_IDLE=50ms`: last close → room gone after fire; rejoin within idle → `Stop()` verified (room survives).
+- Panic test: injected panic in room A's handling; room B's clients still exchange frames; process alive; room A gone.
 
-**Acceptance:** `node --test web/src/lib/sync.test.js` green; `npm run build` succeeds with pages temporarily stubbed.
-
-**Do NOT:** add a router/state library; touch `app.css` tokens; keep any `upload.js` import alive; use localStorage for identity (tab-scoped ephemerality fits the product).
-
-**Commit:** `refactor: client plumbing for ephemeral protocol (api, ws, routes, drift 1.5s)`
-
----
-
-## Phase 4 — Components
-
-### Chunk 9: shell — home, join gate, theater layout, offline overlay
-
-**Files:** `web/src/pages/Home.svelte` (new), `web/src/pages/Room.svelte` (rewrite), `web/src/components/JoinGate.svelte` (new), `web/src/components/SidePanel.svelte` (new)
-
-**Requirements:**
-- Home: one "Create room" button → `POST /api/rooms` → store hostToken → navigate `#/r/{id}` → show copyable invite URL.
-- JoinGate: display-name prompt (2–32, trimmed, inline validation mirroring server regex) shown before WS connect for anyone without a stored name.
-- Room layout per ARCHITECTURE §5: theater area dominates; `SidePanel` collapsible (CSS grid + one `$state` bool, ≥44px toggle target), holds Participants + Chat slots.
-- ConnectionBoundary behavior inside Room.svelte: `connected === false` → dim UI, disable inputs, "Offline / Reconnecting…" banner (PRD §6). `// ponytail: overlay lives in Room.svelte, extract component if a second page ever needs it`.
-- Warm minimalist per PRD §4: rounded corners, tokens from `design.md` only, Lucide icons, no emoji in chrome.
-
-**Acceptance:** two browsers: create → share link → guest names self → both listed; kill server → overlay appears; restart → auto-rejoin via backoff.
-
-**Do NOT:** build Login/Rooms/Admin replacements; add transitions that ignore `prefers-reduced-motion`; put chat logic here.
-
-**Commit:** `feat: home, join gate, collapsible theater layout, offline overlay`
-
-### Chunk 10: participants + chat
-
-**Files:** `web/src/components/Participants.svelte` (new), `web/src/components/Chat.svelte` (edit)
-
-**Requirements:**
-- Participant rows: name, role marker (host), status badge — WAITING / DOWNLOADING / FILE_READY / IN_SYNC (PRD §3) with token colors.
-- Host-only controls per row: "Promote to Host", "Remove from Room" → `MANAGE_USER`. Hidden for guests. ≥44px targets.
-- On `KICKED`: show terminal "Removed from room" state, no auto-reconnect (blocked server-side anyway).
-- Chat: rewire to `CHAT_MESSAGE`/`CHAT_BROADCAST`, temp display names, timestamps (unix seconds → local time), emoji passthrough (native input — no picker lib), history from `ROOM_STATE_SYNC.recentChat`.
-
-**Acceptance:** promote swaps host badge live in both browsers; kicked tab shows terminal state and cannot rejoin; chat survives a reconnect (ring buffer replayed).
-
-**Do NOT:** add an emoji picker dependency; sanitize by regex (render as text nodes — Svelte default escaping is the fix); paginate history.
-
-**Commit:** `feat: participant list with host controls + chat retool`
-
-### Chunk 11: media layer — local playback
-
-**Files:** `web/src/components/Player.svelte` (rewrite), `web/src/pages/Room.svelte` (edit)
-
-**Requirements:**
-- Empty state: no `mediaId` → "Waiting for the host to select media" (PRD §6). Host additionally sees the catalog (from `GET /api/media`) and picks → `MEDIA_SELECT`.
-- Media selected: show "Download media" anchor (`/media/{id}`, `download` attr) → send `UPDATE_STATUS DOWNLOADING` on click; `<input type="file">` to load local copy → `URL.createObjectURL` into `<video>` → `UPDATE_STATUS FILE_READY`.
-- Mismatch check (PRD §5/§6): compare `file.name`/`file.size` to catalog item; mismatch → non-blocking toast, playback still allowed.
-- Sync loop (keep existing echo-driven pattern): controls send `MEDIA_ACTION`; `<video>` mutates only on `MEDIA_SYNC` broadcasts; 500ms loop — drift >1.5s hard seek (silent, PRD §6), >0.15s playbackRate nudge; report `IN_SYNC` when within threshold while playing.
-- Block native controls from acting locally-only (intercept, forward as intents — existing Player pattern survives).
-
-**Acceptance:** two browsers, both load the same local file: play/pause/seek from either side syncs the other; wrong file → warning toast but playable; drift injected via devtools seek self-heals within one loop tick.
-
-**Do NOT:** stream anything from server into `<video>` (PRD §7 — download-and-sync only); change `sync.js` math; auto-play before user file load.
-
-**Commit:** `feat: local-file player with download flow, mismatch warning, drift sync`
-
-### Chunk 12: canvas layer
-
-**Files:** `web/src/components/Canvas.svelte` (new), `web/src/lib/canvas.js` (new), `web/src/lib/canvas.test.js` (new), `web/src/pages/Room.svelte` (edit)
-
-**Requirements:**
-- `canvas.js` (pure, node-testable): stroke buffer with 50ms flush batching (`CANVAS_BATCH_RATE`), point normalization to canvas-relative coords, batch-size cap 100 → split.
-- Canvas.svelte: pointer events → optimistic local render (PRD §3) + buffer; flush → `sendCanvasDraw`; incoming `CANVAS_UPDATE` → render others' strokes; `ROOM_STATE_SYNC.currentCanvas` replay on join/reconnect; transparent until first stroke (PRD §6).
-- Toolbar: brush width, color (palette from design tokens), **Export** → `canvas.toBlob('image/png')` + anchor download (PRD §2.3), **Clear** (host-only) → `CANVAS_CLEAR`; `CANVAS_CLEARED` wipes everyone.
-- Layered over/beside media per theater layout; `prefers-reduced-motion` respected.
-
-**Acceptance:** `node --test web/src/lib/canvas.test.js` green (batch split, flush timing with fake timers, normalization); two-browser draw is mutual and near-instant locally; export saves a PNG; host clear wipes both.
-
-**Do NOT:** requestAnimationFrame throttling beyond the 50ms batcher (keep one mechanism); canvas libs; server-side stroke smoothing; undo (out of scope).
-
-**Commit:** `feat: collaborative canvas with 50ms batching, PNG export, host clear`
+**Do NOT:** touch `watch.go` or `web/src/lib/sync.js`. No host gating of intents (FR-16).
 
 ---
 
-## Phase 5 — Integration
+### DEMO GATE 1 — protocol-level kernel walk
 
-### Chunk 13: delete the old world
-
-**Files (deleted):** `internal/auth/*`, `internal/db/*`, `internal/media/*`, `web/src/lib/upload.js`, `web/src/pages/Login.svelte`, `web/src/pages/Rooms.svelte`, `web/src/pages/Admin.svelte`, `deploy/backup.sh`, `deploy/together-backup.service`, `deploy/together-backup.timer`
-**Files (edited):** `cmd/server/main.go`, `go.mod`, `go.sum`, `README.md`, `CLAUDE.md`, `deploy/together.service`, `build.sh` (only if paths changed)
-
-**Requirements:**
-- Delete every listed file; `go mod tidy` → `go.mod` requires exactly `github.com/coder/websocket` (D7).
-- `main.go` final wiring: config → state store → catalog → mux (`/api/rooms`, `/api/media`, `/media/`, `/ws/`, embedded SPA fallback) → graceful shutdown closing all hubs.
-- `together.service`: drop DB env vars; add `STATIC_MEDIA_PATH`; remove backup timer references.
-- README + CLAUDE.md command sections updated (no ADMIN_USER/PASS, no ffmpeg requirement, new env vars).
-- Full build: `./build.sh` → binary serves SPA; `git restore cmd/server/webdist/index.html`.
-
-**Acceptance:** `go build ./...` with pruned go.mod; `grep -r "modernc\|argon2\|x/crypto" go.mod internal cmd` empty; binary smoke test on `:18080` — create room, join via browser, all four features work; server restart wipes rooms (PRD §7 — verify, that's a feature).
-
-**Do NOT:** keep dead packages "for reference" (git history is the reference); leave orphan env vars in service files; commit built webdist.
-
-**Commit:** `refactor: remove auth, sqlite, and upload pipeline — ephemeral in-memory only`
+Two terminals (`websocat`) + `curl --noproxy '*'` against `TOGETHER_ADDR=:18080`, walking ARCHITECTURE §10 steps 1–4 and 7–11: login → create room → guest join via cookie jar → both dial WS → observe `hello` on both → `intent:play` from one echoes `activity` to both → `chat` both ways → kill one connection, redial → `hello` restores chat + mid-scene activity → `DELETE /api/rooms/{id}` → observe `room_closed` on the survivor. **Must observe:** every listed frame, byte-for-byte field names per ARCHITECTURE §4.5.
 
 ---
 
-## Phase 6 — Testing
+## Chunk 4 — Frontend: guest join route + room shell on the new protocol
 
-### Chunk 14: end-to-end hardening
+**Files:** `web/src/App.svelte`, `web/src/pages/JoinGuest.svelte` (new), `web/src/pages/Home.svelte` (renamed from `Rooms.svelte`), `web/src/pages/Room.svelte` (rewrite), `web/src/components/Chat.svelte`, `web/src/components/RoomClosed.svelte` (new), `web/src/lib/ws.js`, `web/src/lib/api.js`.
 
-**Files:** `internal/live/integration_test.go` (new), `internal/state/state_test.go` (edit), `web/src/lib/sync.test.js` (edit)
+**Requirements (UX S3, S6, S4 shell, V1 view; SPEC §9.7):**
+- `#/join/{token}` renders **before** the `/api/me` gate in `App.svelte` (anonymous short-circuit). JoinGuest (S6): peek `GET /api/rooms/join/{token}` for the room name; one name field, auto-focused; inline name errors; terminal states for dead link and room full (no form, no retry); a live guest cookie skips the form into the room.
+- Home (S3): live rooms list (name, media title, kind, participant count; whole row ≥44px click target), Create room (plain dialog this chunk — ready items only, name optional), empty/loading/error states per UX.
+- Room shell (S4 skeleton): owns the WS; renders from `hello`/`presence`/`chat`/`activity`; participant list with text status (dots in chunk 5); chat panel; reconnect banner that disables intents + chat input while down (AC-3.6); `room_closed` → RoomClosed view (Back to rooms for account users only).
+- `ws.js`: reconnect with exponential backoff (1s → cap 30s), EMA clock offset kept; new frame types wired; field names hand-matched to `hub.go` in the same commit (CONVENTIONS).
+
+**Acceptance:** two browsers — guest joins via link and appears in both participant lists ≤2s (AC-1.2); empty/33-char names rejected inline (AC-1.3); duplicate name shows `(2)` (AC-1.4); guest reload → same identity, no form, one presence entry (AC-1.5); chat both ways + history on rejoin (AC-4.1/4.2); host end → both see Room Closed ≤2s (AC-5.2); guest at `#/` or `#/admin` sees no room list/admin data (AC-1.8).
+
+**Do NOT:** no acquisition panel or blob playback yet (Player may temporarily keep V1 streaming); no shadcn; do not add a router dep.
+
+---
+
+## Chunk 5 — Local-file playback: acquisition panel, blob player, status dots
+
+**Files:** `web/src/lib/localfile.js` (new), `web/src/lib/localfile.test.js` (new), `web/src/components/AcquisitionPanel.svelte` (new), `web/src/components/Player.svelte` (rewrite), `web/src/components/Participants.svelte` (new), `web/src/pages/Room.svelte`.
+
+**Requirements (SPEC §9.3–9.4, §9.8; UX §3.4; FR-9…FR-15):**
+- `localfile.js` (pure, tested): size check `file.size === meta.media.sizeBytes` → ok/mismatch with both sizes; objectURL create/revoke helpers.
+- AcquisitionPanel occupies the player region until a size-matched file is loaded: media title + human size + kind; **Download from server** (plain navigation to `/media/{id}/download` — browser owns progress/resume; page memory must not grow); **Load your copy** (file input); helper text funnels download users back to the picker; inline mismatch state (selected vs expected size, re-pick affordance, never a modal, never auto-streams); quiet **Play from server instead** last (this chunk: `window.confirm` stand-in; M4 dialog in chunk 7).
+- Player: src = `blob:` objectURL (drop `crossorigin`); arm overlay until first user gesture (FR-12); intents/echo/drift loop unchanged (>1s hard seek, >0.15s rate nudge); subtitles stay server-`<track>` (guest cookie rides the fetch); streaming fallback uses `/media/{id}/stream` only after explicit confirm.
+- Status reporting: client sends `status` on transitions — `downloading` (no valid file) → `file_ready` (size-matched, not armed) → `in_sync` (armed + tracking within drift bands). Participants shows the dot ladder `◌ ◐ ●` + name + HOST badge; title-attribute tooltip this chunk.
+
+**Acceptance:** AC-2.1–2.8 pass manually in two browsers; AC-3.3 (play never gated on readiness) and AC-3.4 (mid-scene arm lands within 1s band, not 0:00); `node --test` green for `localfile.test.js`; during 60s local playback the network tab shows zero media requests (AC-2.6).
+
+**Do NOT:** never read the media file into page memory (no Blob/ArrayBuffer buffering — NFR-4); no automatic streaming fallback on any failure (FR-13); do not change `sync.js`.
+
+---
+
+### DEMO GATE 2 — WALKING SKELETON: kernel journey F1 end-to-end
+
+Two browsers (normal + incognito), real uploaded video, walking UX F1 steps 1–11 verbatim: host signs in → creates room → copies link → guest joins named "Ali" → downloads media → loads file → size check → File Ready dot on both screens → host plays → sync within bands → guest scrubs → both jump → guest connection killed and restored mid-scene via the invite link (same name, mid-scene position) → chat → host ends room → both see Room Closed; library + accounts intact. **Must observe:** every step, plus the three dot states changing on the *other* browser's participant list. Ugly V1 styling is acceptable here; any faked step fails the gate. Milestone A ends here.
+
+---
+
+## Chunk 6 — shadcn-svelte foundation + account surfaces
+
+**Files:** `web/package.json`, `web/components.json` (new), `web/src/app.css`, `web/src/components/ui/*` (generated), `web/src/pages/Login.svelte`, `web/src/pages/Register.svelte` (new — split out of Login), `web/src/pages/Home.svelte`, `web/src/components/MediaPickerDialog.svelte` (new), `web/src/pages/Admin.svelte` (kind column only).
+
+**Requirements (SPEC §6–7; DESIGN.md is the contract):**
+- Install shadcn-svelte on the existing Tailwind v4 setup; `components.json` aliases generated components to `web/src/components/ui/`. Map shadcn semantic CSS vars → existing `@theme` tokens exactly per DESIGN.md §3 (no new raw hex anywhere; add the `--radius-pill` mapping and motion-duration vars DESIGN.md names).
+- Adopt Button/Input/Card/Dialog/DropdownMenu/Skeleton/Alert on S1/S2/S3/M1: Login + Register split per UX; Home with skeleton loading rows, inline retry banner, empty state; MediaPickerDialog (M1) — single-select **ready** items with title/kind/human size, Create disabled until selection, room name optional defaulting to media title, empty states per UX (admin link vs "ask your admin").
+- Admin: library table gains the kind column (S7); no other admin restyle this chunk.
+- Remove `.btn-primary`/`.btn-ghost`/`.input` usage from the pages this chunk touches.
+
+**Acceptance:** `./build.sh` succeeds; `grep -rn '#[0-9a-fA-F]\{3\}' web/src/components web/src/pages` (excluding `components/ui/` internals only if shadcn generates none — target: empty); focus rings are the secondary (cyan) token on every interactive element; AC-5.1 (create → appears in other account's list); M1 behaviors per UX §M1.
+
+**Do NOT:** restyle the room interior yet; no light theme; no extra shadcn components beyond DESIGN.md §4's inventory.
+
+---
+
+## Chunk 7 — Room surfaces on shadcn: strip, menu, dialogs, side panel
+
+**Files:** `web/src/components/RoomStrip.svelte` (new), `RoomMenu.svelte` (new), `EndRoomDialog.svelte` (new, M2), `RegenerateLinkDialog.svelte` (new, M3), `PlayFromServerDialog.svelte` (new, M4), `SidePanel.svelte` (new), `Participants.svelte`, `Chat.svelte`, `AcquisitionPanel.svelte`, `web/src/pages/Room.svelte`, `web/src/app.css`.
+
+**Requirements (UX S4 §1–4, §5 density; DESIGN.md):**
+- Room strip: Leave, room name + media title, HOST badge; host-only **Room** disclosure menu (DropdownMenu): copy invite link (built from joinToken → `#/join/{token}`, "Link copied" confirm), regenerate (→ M3 AlertDialog), end room (→ M2 AlertDialog). Strip auto-hides during playback.
+- M4 replaces the chunk-5 `window.confirm`; its copy per UX §M4; confirm switches the player to `/media/{id}/stream`.
+- Side panel: collapsible, remembers state (localStorage), Participants block fixed on top, Chat fills; dot Tooltip spells out the state name; panel toggle in transport.
+- Transport bar per DESIGN.md: play/pause, scrub (Slider wired to seek intents), position/duration in mono, CC, fullscreen, panel toggle — all echo-driven.
+- Delete `.btn-primary`, `.btn-ghost`, `.input` classes from `app.css` — V1 primitives fully retired.
+
+**Acceptance:** AC-1.6/1.7 via M3 (old link terminal-invalid, joined guest survives, new link works); M2 end flow = AC-5.2; M4 flow = AC-2.7; panel collapse survives reload; `grep -rn 'btn-primary\|btn-ghost\|\.input' web/src` empty; dot tooltip shows on hover and focus.
+
+**Do NOT:** no audio UI; no kick/co-host affordances (backlog); host controls must not sit next to play/pause (UX §5).
+
+---
+
+### DEMO GATE 3 — styled kernel + host powers
+
+Re-walk F1 fully styled, plus F4: kill the host tab mid-playback → guest playback continues, guest can pause/seek/chat (AC-5.5) → host reopens from Home → HOST badge + Room menu restored. Then AC-1.6/1.7 regenerate walk. **Must observe:** theater layout (player dominates, strip auto-hides), dot tooltips, reconnect banner disabling inputs, all three dialogs, "Link copied" confirm.
+
+---
+
+## Chunk 8 — Audio: pipeline branch + S5 now-playing
+
+**Files:** `internal/media/pipeline.go` + test, `internal/media/upload.go` + test, `web/src/components/AudioPlayer.svelte` (new), `web/src/pages/Room.svelte`, `web/src/components/MediaPickerDialog.svelte`, `web/src/pages/Admin.svelte`.
+
+**Requirements (SPEC §9.9; ARCHITECTURE §4.2; UX S5; FR-35…37, FR-40):**
+- Pipeline: probe result with **no video stream** → audio branch: aac/m4a/mp3 → move as-is; anything else → `-c:a aac` into `.m4a`; still one job at a time under `nice -n 19`; **no libx264 path for audio, ever**. `media.kind` (`video|audio`) set from the probe at ingest; `upload.go` stops accepting a client-supplied kind.
+- Room switches player component on `kind`: AudioPlayer (S5) = now-playing anchor (title + duration, mono numerics), transport minus CC/fullscreen, side panel **open by default**; acquisition panel and status ladder identical to video.
+- M1 and S7 label every item `video`/`audio`.
+
+**Acceptance:** pipeline tests with lavfi-synthesized fixtures (sine-wave mp3/opus; skip pattern if ffmpeg missing): mp3 moved not transcoded, opus → `.m4a`, kind set correctly from probe; AC-6.1–6.4 manually; `go test ./internal/media/` green.
+
+**Do NOT:** no waveform/artwork; no multiple audio tracks; do not touch the video pipeline tree.
+
+---
+
+## Chunk 9 — Hardening sweep + docs
+
+**Files:** `internal/live/*_test.go`, `web/src/lib/ws.js`, `README.md`, `CLAUDE.md`, `.superpowers/sdd/progress.md`.
 
 **Requirements:**
-- One integration test file running the real stack (httptest server, real WS dials, no SQLite/ffmpeg anywhere):
-  1. create room → host + 2 guests join → state sync shapes correct
-  2. guest sends PLAY → all three converge on projected position
-  3. canvas batch → fan-out + late-join replay
-  4. kick → blocked rejoin; promote → role swap
-  5. host socket drop → oldest guest inherits after grace (injected short grace)
-  6. limits: 51st join rejected, 101-point batch dropped, 33-char name rejected
-- Race check: `go test ./... -race` green.
-- `sync.test.js`: backward-clock clamp + 1.5s threshold cases both covered.
-- Final sweep: `gofmt -l internal cmd` empty; `npm run build`; `git restore cmd/server/webdist/index.html`; manual two-browser checklist appended to `.superpowers/sdd/progress.md`.
+- Backfill edge tests: name freed after departure vs kept on reconnect (PRD §9), two host tabs coexist, backward-clock clamp still covered on both `watch_test.go` and `sync.test.js`, room-full terminal state, dead-vs-unknown-token no-oracle.
+- `go test ./... -race` green; `gofmt -l internal cmd` empty; `cd web && node --test src/lib/*.test.js` green.
+- Walk the full PRD §6 AC checklist in two browsers; log outcomes per-AC in `.superpowers/sdd/progress.md`.
+- Docs: README env table gains `TOGETHER_ROOM_IDLE`; CLAUDE.md updated (routes, files, doc map — it still references deleted `docs/debt.md` and the V1 plan); verify restic backup units untouched; `git restore cmd/server/webdist/index.html` before the commit.
 
-**Acceptance:** `go test ./... -race` and `node --test` both green in <30s total (no ffmpeg fixtures anymore — suite gets faster).
+**Acceptance:** every AC in PRD §6 has a logged pass (or a logged, user-acknowledged deviation); `-race` clean.
 
-**Do NOT:** add testify or any test framework; test Svelte components headlessly (manual two-browser check per repo convention); write per-function micro-suites over the scenario test.
+**Do NOT:** no new features; no backlog items sneaking in.
 
-**Commit:** `test: full-stack integration suite for ephemeral rooms, sync, canvas, roles`
+---
+
+### DEMO GATE 4 — v1 exit bar
+
+US-6 (music room end-to-end from admin upload of an audio file) + US-7 (invite-code register incl. failed-attempt-keeps-code, resumable upload with mid-upload reload, processing→ready→failed states, delete) + the crash drill: restart the server with a live room → sign-in works, library and invite codes intact, room and chat gone (AC-5.6). **Must observe:** all three, on the production build (`./build.sh` binary, not the dev server).
