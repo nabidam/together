@@ -16,6 +16,8 @@ Sandbox note (from CLAUDE.md): smoke-test with `curl --noproxy '*'` and `TOGETHE
 
 ## Task 1 — DB cutover + kind vocabulary normalization
 
+> **DONE** `e113883` — Verified: `go test ./internal/db ./internal/media` green; `TestOpen_Cutover*` (drops V1 tables, movie|music→video|audio, survivors intact, idempotent across two Open()) and `TestMediaKindFilterV2Vocabulary` (kind=video/audio filter, retired movie vocab absent) pass; `gofmt -l internal cmd` empty. `internal/api` + `internal/live` V1 tests fail on the now-dropped tables — expected chunk-1 intermediate, resolved by task 2 which deletes/rewrites them.
+
 - **Objective:** Boot-time V2 cutover: drop V1 room tables, normalize `media.kind` values, update the library kind filter. (PLAN chunk 1, DB half.)
 - **Inputs:** shipped V1 `internal/db/db.go` (idempotent DDL), V1 database files with `rooms`/`messages`/`activities` tables and `movie|music` kinds.
 - **Outputs:** cutover running idempotently after DDL on every boot; `serve.go` kind filter speaking `video|audio`.
@@ -44,6 +46,8 @@ Sandbox note (from CLAUDE.md): smoke-test with `curl --noproxy '*'` and `TOGETHE
 ---
 
 ## Task 2 — Rooms move into the hub: Room struct, lifecycle HTTP, delete internal/api
+
+> **DONE** `bc569c2` — Verified: `go test ./... ` green (full suite restored), `go vet ./...` clean, `go test -race ./internal/live` clean, `gofmt -l internal cmd` empty. `rooms_test.go`/`hub_test.go` drive the real stack (httptest + real WS dials): create→201 with 16-hex id + 128-bit token, name defaults to media title, name>64→400, unknown/non-ready media→404, list shape correct, non-host delete→403 (room survives) / host delete→200 (gone from list + hub) / unknown→404, regenerate replaces token & non-host→403, fresh hub over same DB has 0 rooms while media/users persist (AC-5.6), WS chat/presence/activity-sync/late-joiner-hello work in-memory, dial to unknown room rejected. `internal/api` deleted.
 
 - **Objective:** Rooms become in-memory hub state with a new HTTP surface; V1 DB-backed rooms handlers and hub checkpointing deleted. (PLAN chunk 1, hub half.)
 - **Inputs:** Task 1 (no `rooms` table to collide with); V1 `internal/live/hub.go`, `internal/api/`.
