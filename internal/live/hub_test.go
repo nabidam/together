@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -37,7 +38,10 @@ func newStack(t *testing.T) (*httptest.Server, *Hub, *sql.DB, string, string) {
 	hub := NewHub(d)
 	mux := http.NewServeMux()
 	hub.Routes(mux)
-	mux.HandleFunc("GET /ws/{id}", auth.Require(d, false, hub.Handle))
+	// Mounted under the real room gate (not bare auth.Require) so a guest
+	// cookie also passes: RequireRoom delegates to auth.Require for account
+	// sessions, so account dials are unaffected.
+	mux.HandleFunc("GET /ws/{id}", hub.RequireRoom(hub.Handle))
 	ts := httptest.NewServer(mux)
 	t.Cleanup(ts.Close)
 
@@ -103,6 +107,17 @@ func send(t *testing.T, c *websocket.Conn, v any) {
 	}
 }
 
+// joinAsGuest POSTs /api/rooms/join and returns a ready-to-use "Cookie"
+// header value for dialing /ws/{id} as that guest.
+func joinAsGuest(t *testing.T, ts *httptest.Server, token, name string) string {
+	t.Helper()
+	code, out, cookie := postJoin(t, ts.URL, token, name, "")
+	if code != 200 || cookie == "" {
+		t.Fatalf("guest join failed: code=%d out=%+v", code, out)
+	}
+	return "together_guest=" + cookie
+}
+
 func waitFor(t *testing.T, c *websocket.Conn, typ string) frame {
 	t.Helper()
 	for i := 0; i < 10; i++ {
@@ -123,7 +138,7 @@ func TestChatAndPresenceBroadcast(t *testing.T) {
 	read(t, b) // hello
 	waitFor(t, a, "presence")
 	send(t, a, frame{"type": "chat", "body": "hi love"})
-	if f := waitFor(t, b, "chat"); f["body"] != "hi love" || f["username"] != "alice" {
+	if f := waitFor(t, b, "chat"); f["body"] != "hi love" || f["name"] != "alice" || f["isGuest"] != false {
 		t.Fatalf("%+v", f)
 	}
 }
@@ -164,5 +179,213 @@ func TestWSRejectsUnknownRoom(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("dial to a non-existent room should fail the upgrade")
+	}
+}
+
+// --- Task 5: WS protocol V2 ---
+
+func TestStatusBroadcastsPresence(t *testing.T) {
+	ts, _, _, alice, bob := newStack(t)
+	room, _ := createRoom(t, ts, alice, 1, "")
+	a := dial(t, ts, room, alice)
+	read(t, a)                // hello
+	waitFor(t, a, "presence") // a's own join is itself a broadcast recipient
+
+	b := dial(t, ts, room, bob)
+	read(t, b)                // hello
+	waitFor(t, b, "presence") // b's own join, likewise self-delivered
+	waitFor(t, a, "presence") // a observes b joining
+
+	send(t, b, frame{"type": "status", "state": "file_ready"})
+
+	for _, c := range []*websocket.Conn{a, b} {
+		f := waitFor(t, c, "presence")
+		users, _ := f["users"].([]any)
+		found := false
+		for _, u := range users {
+			um := u.(map[string]any)
+			if um["name"] == "bob" && um["status"] == "file_ready" {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("status change not reflected in presence: %+v", f)
+		}
+	}
+}
+
+func TestChatRingDropsOldest(t *testing.T) {
+	ts, _, _, alice, _ := newStack(t)
+	room, _ := createRoom(t, ts, alice, 1, "")
+	a := dial(t, ts, room, alice)
+	read(t, a) // hello
+
+	for i := 0; i < 210; i++ {
+		send(t, a, frame{"type": "chat", "body": fmt.Sprintf("m%d", i)})
+		waitFor(t, a, "chat") // drain own broadcast before sending the next
+	}
+
+	fresh := dial(t, ts, room, alice)
+	h := read(t, fresh) // hello
+	chatList, _ := h["chat"].([]any)
+	if len(chatList) != 200 {
+		t.Fatalf("want 200 messages in the ring, got %d", len(chatList))
+	}
+	first := chatList[0].(map[string]any)
+	last := chatList[199].(map[string]any)
+	if first["body"] != "m10" || last["body"] != "m209" {
+		t.Fatalf("ring must drop oldest and keep order: first=%v last=%v", first["body"], last["body"])
+	}
+}
+
+func TestHelloOnReconnectCarriesActivityChatAndHost(t *testing.T) {
+	ts, _, _, alice, bob := newStack(t)
+	room, tok := createRoom(t, ts, alice, 1, "")
+
+	a := dial(t, ts, room, alice)
+	ha := read(t, a) // hello
+	you := ha["you"].(map[string]any)
+	if you["isHost"] != true || you["isGuest"] != false || you["name"] != "alice" {
+		t.Fatalf("room owner should be host: %+v", you)
+	}
+
+	b := dial(t, ts, room, bob)
+	hb := read(t, b) // hello
+	youB := hb["you"].(map[string]any)
+	if youB["isHost"] != false {
+		t.Fatalf("non-owner account should not be host: %+v", youB)
+	}
+
+	guestCookie := joinAsGuest(t, ts, tok, "Casey")
+	g := dial(t, ts, room, guestCookie)
+	hg := read(t, g) // hello
+	youG := hg["you"].(map[string]any)
+	if youG["isGuest"] != true || youG["isHost"] != false || youG["name"] != "Casey" {
+		t.Fatalf("guest hello.you wrong: %+v", youG)
+	}
+
+	send(t, a, frame{"type": "chat", "body": "hello there"})
+	waitFor(t, a, "chat")
+
+	a.CloseNow()
+	reconnect := dial(t, ts, room, alice)
+	hr := read(t, reconnect) // hello
+	if hr["activity"] == nil {
+		t.Fatal("reconnect hello must carry the current activity")
+	}
+	chatList, _ := hr["chat"].([]any)
+	found := false
+	for _, c := range chatList {
+		if c.(map[string]any)["body"] == "hello there" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("reconnect hello must carry chat history: %+v", chatList)
+	}
+}
+
+func TestStatusNeverEntersWatchApply(t *testing.T) {
+	ts, _, _, alice, _ := newStack(t)
+	room, _ := createRoom(t, ts, alice, 1, "")
+	a := dial(t, ts, room, alice)
+	ha := read(t, a) // hello
+	before, _ := json.Marshal(ha["activity"])
+
+	send(t, a, frame{"type": "status", "state": "in_sync"})
+	waitFor(t, a, "presence") // status only ever produces a presence broadcast
+
+	b := dial(t, ts, room, alice)
+	hb := read(t, b) // hello
+	after, _ := json.Marshal(hb["activity"])
+
+	if string(before) != string(after) {
+		t.Fatalf("a status frame must never change activity: before=%s after=%s", before, after)
+	}
+}
+
+func TestChatValidation_ErrorKeepsConnectionOpen(t *testing.T) {
+	ts, _, _, alice, _ := newStack(t)
+	room, _ := createRoom(t, ts, alice, 1, "")
+	a := dial(t, ts, room, alice)
+	read(t, a) // hello
+
+	send(t, a, frame{"type": "chat", "body": ""})
+	if f := waitFor(t, a, "error"); f["body"] == nil {
+		t.Fatalf("empty chat should produce an error frame: %+v", f)
+	}
+
+	send(t, a, frame{"type": "chat", "body": strings.Repeat("x", 2001)})
+	if f := waitFor(t, a, "error"); f["body"] == nil {
+		t.Fatalf(">2000 char chat should produce an error frame: %+v", f)
+	}
+
+	send(t, a, frame{"type": "chat", "body": "still works"})
+	if f := waitFor(t, a, "chat"); f["body"] != "still works" {
+		t.Fatalf("connection must stay usable after errors: %+v", f)
+	}
+}
+
+func TestGuestDialAppearsInPresenceAndChat(t *testing.T) {
+	ts, _, _, alice, _ := newStack(t)
+	room, tok := createRoom(t, ts, alice, 1, "")
+	a := dial(t, ts, room, alice)
+	read(t, a)                // hello
+	waitFor(t, a, "presence") // a's own join is itself a broadcast recipient
+
+	g := dial(t, ts, room, joinAsGuest(t, ts, tok, "Casey"))
+	hg := read(t, g) // hello
+	you := hg["you"].(map[string]any)
+	if you["isGuest"] != true || you["name"] != "Casey" {
+		t.Fatalf("guest hello.you wrong: %+v", you)
+	}
+	waitFor(t, g, "presence") // guest's own join, likewise self-delivered
+
+	pf := waitFor(t, a, "presence")
+	users, _ := pf["users"].([]any)
+	found := false
+	for _, u := range users {
+		um := u.(map[string]any)
+		if um["name"] == "Casey" && um["isGuest"] == true {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("guest missing from presence: %+v", pf)
+	}
+
+	send(t, g, frame{"type": "chat", "body": "hi from guest"})
+	if f := waitFor(t, a, "chat"); f["name"] != "Casey" || f["isGuest"] != true || f["body"] != "hi from guest" {
+		t.Fatalf("guest chat frame wrong: %+v", f)
+	}
+}
+
+// TestChatWritesNoDB is the compile-level-plus-runtime half of AC "zero DB
+// writes on chat": no `messages` table exists at all, and sending chat
+// leaves the schema and durable row counts untouched.
+func TestChatWritesNoDB(t *testing.T) {
+	ts, _, d, alice, _ := newStack(t)
+	room, _ := createRoom(t, ts, alice, 1, "")
+	a := dial(t, ts, room, alice)
+	read(t, a) // hello
+
+	var messagesTables int
+	d.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='table' AND name='messages'`).Scan(&messagesTables)
+	if messagesTables != 0 {
+		t.Fatal("a messages table must not exist in V2")
+	}
+
+	var usersBefore, mediaBefore int
+	d.QueryRow(`SELECT count(*) FROM users`).Scan(&usersBefore)
+	d.QueryRow(`SELECT count(*) FROM media`).Scan(&mediaBefore)
+
+	send(t, a, frame{"type": "chat", "body": "no db here"})
+	waitFor(t, a, "chat")
+
+	var usersAfter, mediaAfter int
+	d.QueryRow(`SELECT count(*) FROM users`).Scan(&usersAfter)
+	d.QueryRow(`SELECT count(*) FROM media`).Scan(&mediaAfter)
+	if usersBefore != usersAfter || mediaBefore != mediaAfter {
+		t.Fatalf("chat must not write durable rows: users %d->%d media %d->%d", usersBefore, usersAfter, mediaBefore, mediaAfter)
 	}
 }

@@ -38,13 +38,58 @@ type Room struct {
 	joinToken  string      // ≥128-bit crypto-random hex; regenerate replaces it
 	watch      *WatchState // nil = no active activity; started at creation
 	clients    map[*client]bool
+	// chat is an in-memory drop-oldest ring of the latest 200 messages
+	// (FR-25), oldest first. A plain slice capped by re-slicing on append is
+	// enough at this size — no circular-buffer indexing needed. Never
+	// persisted: it dies with the room like everything else in §3.2.
+	chat []ChatMsg
+}
+
+// ChatMsg is both the wire shape of an outbound `chat` frame's payload (sans
+// the `type` envelope) and a room's ring buffer entry — the same struct
+// serves hello.chat[] and a fresh broadcast so the two never drift apart.
+type ChatMsg struct {
+	Name      string `json:"name"`
+	IsGuest   bool   `json:"isGuest"`
+	Body      string `json:"body"`
+	CreatedAt int64  `json:"createdAt"` // unix seconds
+}
+
+// Presence is one live connection's row in a `presence`/`hello.users` frame.
+// One entry per connection, not per identity — two tabs (or two hosts, task
+// 20) each get their own row with their own status.
+type Presence struct {
+	Name    string `json:"name"`
+	IsHost  bool   `json:"isHost"`
+	IsGuest bool   `json:"isGuest"`
+	Status  string `json:"status"`
+}
+
+const chatRingCap = 200
+
+// appendChat drops the oldest entry once the ring exceeds chatRingCap.
+// Caller holds r.mu.
+func (r *Room) appendChat(m ChatMsg) {
+	r.chat = append(r.chat, m)
+	if len(r.chat) > chatRingCap {
+		r.chat = r.chat[len(r.chat)-chatRingCap:]
+	}
 }
 
 type client struct {
-	user   auth.User
-	send   chan []byte
-	cancel func() // stops this connection; set in Handle, invoked by teardown
+	user    auth.User
+	name    string // display name: account username, or guest's post-suffix name
+	isGuest bool
+	guestID string // set for guest connections only
+	status  string // downloading|file_ready|in_sync, client-reported, per-connection
+	send    chan []byte
+	cancel  func() // stops this connection; set in Handle, invoked by teardown
 }
+
+// isHostOf reports live host status: the room's ownerID is fixed at creation
+// (never mutated), so reading it here needs no lock — matching isHost in
+// rooms.go, which does the same.
+func (c *client) isHostOf(r *Room) bool { return !c.isGuest && c.user.ID == r.ownerID }
 
 func NewHub(d *sql.DB) *Hub {
 	return &Hub{db: d, rooms: map[string]*Room{}, guests: map[string]*GuestSession{}}
@@ -86,14 +131,13 @@ func (r *Room) activityJSON() any {
 	return map[string]any{"id": r.id, "type": "watch", "state": *r.watch}
 }
 
-func (r *Room) presence() []auth.User {
-	seen := map[int64]bool{}
-	out := []auth.User{}
+// presence returns one Presence per live connection — deliberately not
+// deduped by identity (§3.2: two tabs/hosts coexist, each with its own
+// per-connection status). Caller holds r.mu.
+func (r *Room) presence() []Presence {
+	out := []Presence{}
 	for c := range r.clients {
-		if !seen[c.user.ID] {
-			seen[c.user.ID] = true
-			out = append(out, c.user)
-		}
+		out = append(out, Presence{Name: c.name, IsHost: c.isHostOf(r), IsGuest: c.isGuest, Status: c.status})
 	}
 	return out
 }
@@ -105,6 +149,7 @@ type inMsg struct {
 	Action   string  `json:"action"`
 	Position float64 `json:"position"`
 	T        int64   `json:"t"`
+	State    string  `json:"state"` // status frame: downloading|file_ready|in_sync
 }
 
 // Handle upgrades a WS connection scoped to an existing room. The room must
@@ -120,9 +165,14 @@ func (h *Hub) Handle(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	user := auth.From(req)
+	name, isGuest, guestID := user.Username, false, ""
+	if gs, ok := GuestFrom(req); ok {
+		name, isGuest, guestID = gs.name, true, gs.guestID
+	}
 	ctx, cancel := context.WithCancel(req.Context())
 	defer cancel()
-	c := &client{user: user, send: make(chan []byte, 32), cancel: cancel}
+	// status starts "downloading" (the ◌ rung — no local file yet; §3.2).
+	c := &client{user: user, name: name, isGuest: isGuest, guestID: guestID, status: "downloading", send: make(chan []byte, 32), cancel: cancel}
 	go func() { // writer
 		for b := range c.send {
 			if conn.Write(ctx, websocket.MessageText, b) != nil {
@@ -134,7 +184,16 @@ func (h *Hub) Handle(w http.ResponseWriter, req *http.Request) {
 
 	r.mu.Lock()
 	r.clients[c] = true
-	c.send <- marshal(map[string]any{"type": "hello", "you": user, "users": r.presence(), "activity": r.activityJSON()})
+	chatHistory := make([]ChatMsg, len(r.chat))
+	copy(chatHistory, r.chat) // oldest→newest, same order as the ring
+	c.send <- marshal(map[string]any{
+		"type":     "hello",
+		"you":      map[string]any{"name": c.name, "isHost": c.isHostOf(r), "isGuest": c.isGuest},
+		"users":    r.presence(),
+		"activity": r.activityJSON(),
+		"chat":     chatHistory,
+		"room":     map[string]any{"name": r.name, "kind": r.kind, "mediaId": r.mediaID},
+	})
 	r.broadcast(marshal(map[string]any{"type": "presence", "users": r.presence()}))
 	r.mu.Unlock()
 
@@ -169,13 +228,28 @@ func (h *Hub) dispatch(r *Room, c *client, m inMsg) {
 		}
 
 	case "chat":
-		// In-memory broadcast only; the ring buffer + hello history land in task 5.
+		// In-memory only — no messages table exists (V1 chat persistence is
+		// deleted); this case performs zero SQL.
 		if len(m.Body) == 0 || len(m.Body) > 2000 {
+			select {
+			case c.send <- marshal(map[string]any{"type": "error", "body": "chat message must be 1-2000 characters"}):
+			default: // ponytail: dropped frame beats leaked goroutine; the connection stays open regardless
+			}
 			return
 		}
-		now := time.Now().Unix()
+		msg := ChatMsg{Name: c.name, IsGuest: c.isGuest, Body: m.Body, CreatedAt: time.Now().Unix()}
 		r.mu.Lock()
-		r.broadcast(marshal(map[string]any{"type": "chat", "userId": c.user.ID, "username": c.user.Username, "body": m.Body, "createdAt": now}))
+		r.appendChat(msg)
+		r.broadcast(marshal(map[string]any{"type": "chat", "name": msg.Name, "isGuest": msg.IsGuest, "body": msg.Body, "createdAt": msg.CreatedAt}))
+		r.mu.Unlock()
+
+	case "status":
+		if m.State != "downloading" && m.State != "file_ready" && m.State != "in_sync" {
+			return // presence-only, malformed states are silently ignored — never reaches watch.Apply
+		}
+		r.mu.Lock()
+		c.status = m.State
+		r.broadcast(marshal(map[string]any{"type": "presence", "users": r.presence()}))
 		r.mu.Unlock()
 
 	case "start":

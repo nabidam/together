@@ -403,6 +403,7 @@ func (h *Hub) createRoom(w http.ResponseWriter, r *http.Request) {
 		joinToken:  randHex(16),
 		watch:      &st, // creating a room starts its watch activity (§4.3)
 		clients:    map[*client]bool{},
+		chat:       []ChatMsg{},
 	}
 
 	h.mu.Lock()
