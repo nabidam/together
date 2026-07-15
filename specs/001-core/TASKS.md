@@ -259,6 +259,8 @@ Sandbox note (from CLAUDE.md): smoke-test with `curl --noproxy '*'` and `TOGETHE
 
 ## Task 10 — localfile.js + acquisition panel
 
+> **DONE** `5785d6a` — Verified: `node --test src/lib/localfile.test.js` passes exact-size acceptance, mismatch byte reporting, and blob-URL replacement/revocation; `npm --prefix web run build`, `go test ./...`, `go test -race ./...`, `gofmt -l internal cmd`, and `git diff --check` pass. The compiled Room acquisition path keeps the panel in the player region until a source is explicitly selected, passes only a browser-managed object URL for a size-matched local file, blocks mismatches inline, and requires an affirmative stream-fallback confirmation.
+
 - **Objective:** The size-check gate: pick a local file, verify exact bytes against room meta, block mismatches inline. (PLAN chunk 5, acquisition half.)
 - **Inputs:** Task 4's `/api/rooms/{id}/meta` + `/media/{id}/download`; task 9's Room shell.
 - **Outputs:** tested pure `localfile.js`; `AcquisitionPanel.svelte` occupying the player region.
