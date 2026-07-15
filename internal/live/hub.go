@@ -2,11 +2,11 @@ package live
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
-	"log"
 	"net/http"
-	"strconv"
 	"sync"
 	"time"
 
@@ -15,63 +15,59 @@ import (
 	"together/internal/auth"
 )
 
+// Hub owns the in-memory room world. Nothing here is persisted: rooms, their
+// playback state, chat, and presence live only in memory and die with the room
+// or the process (V2 — SPEC §9.2/§9.11). The db handle is retained only for
+// reading durable media rows at room creation, never for room state.
 type Hub struct {
 	db    *sql.DB
-	mu    sync.Mutex
-	rooms map[int64]*room
+	mu    sync.Mutex // guards rooms map
+	rooms map[string]*Room
 }
 
-type room struct {
-	id       int64
-	mu       sync.Mutex
-	clients  map[*client]bool
-	actID    int64
-	actState *WatchState // nil = no activity. ponytail: watch-only; make an interface when music activity lands
+// Room is ephemeral hub state. All mutable fields are guarded by Room.mu.
+type Room struct {
+	mu         sync.Mutex
+	id         string      // opaque, crypto-random 16 hex chars
+	name       string      // ≤64 chars
+	ownerID    int64       // account user id; isHost := conn.userID == ownerID, live
+	mediaID    int64       // fixed at creation
+	mediaTitle string      // copied from the media row at creation
+	kind       string      // 'video' | 'audio', copied from the media row
+	joinToken  string      // ≥128-bit crypto-random hex; regenerate replaces it
+	watch      *WatchState // nil = no active activity; started at creation
+	clients    map[*client]bool
 }
 
 type client struct {
-	user auth.User
-	send chan []byte
+	user   auth.User
+	send   chan []byte
+	cancel func() // stops this connection; set in Handle, invoked by teardown
 }
 
-func NewHub(d *sql.DB) *Hub { return &Hub{db: d, rooms: map[int64]*room{}} }
+func NewHub(d *sql.DB) *Hub { return &Hub{db: d, rooms: map[string]*Room{}} }
 
-// Restore reloads active activities after a server restart.
-func (h *Hub) Restore() error {
-	rows, err := h.db.Query(`SELECT id, room_id, state_json FROM activities WHERE status='active'`)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var id, roomID int64
-		var js string
-		rows.Scan(&id, &roomID, &js)
-		var st WatchState
-		if json.Unmarshal([]byte(js), &st) == nil {
-			r := h.room(roomID)
-			r.actID, r.actState = id, &st
-		}
-	}
-	return nil
+// randHex returns n crypto-random bytes as hex — the same generator behind
+// internal/auth session tokens (crypto/rand). Room ids use 8 bytes (16 hex);
+// join tokens 16 bytes (128-bit).
+func randHex(n int) string {
+	b := make([]byte, n)
+	rand.Read(b)
+	return hex.EncodeToString(b)
 }
 
-func (h *Hub) room(id int64) *room {
+func (h *Hub) getRoom(id string) (*Room, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if r, ok := h.rooms[id]; ok {
-		return r
-	}
-	r := &room{id: id, clients: map[*client]bool{}}
-	h.rooms[id] = r
-	return r
+	r, ok := h.rooms[id]
+	return r, ok
 }
 
 func nowMs() int64 { return time.Now().UnixMilli() }
 
 func marshal(v any) []byte { b, _ := json.Marshal(v); return b }
 
-func (r *room) broadcast(b []byte) { // callers hold r.mu
+func (r *Room) broadcast(b []byte) { // callers hold r.mu
 	for c := range r.clients {
 		select {
 		case c.send <- b:
@@ -80,14 +76,14 @@ func (r *room) broadcast(b []byte) { // callers hold r.mu
 	}
 }
 
-func (r *room) activityJSON() any {
-	if r.actState == nil {
+func (r *Room) activityJSON() any {
+	if r.watch == nil {
 		return nil
 	}
-	return map[string]any{"id": r.actID, "type": "watch", "state": *r.actState}
+	return map[string]any{"id": r.id, "type": "watch", "state": *r.watch}
 }
 
-func (r *room) presence() []auth.User {
+func (r *Room) presence() []auth.User {
 	seen := map[int64]bool{}
 	out := []auth.User{}
 	for c := range r.clients {
@@ -108,10 +104,12 @@ type inMsg struct {
 	T        int64   `json:"t"`
 }
 
+// Handle upgrades a WS connection scoped to an existing room. The room must
+// already exist (created via POST /api/rooms) — there is no lazy creation.
 func (h *Hub) Handle(w http.ResponseWriter, req *http.Request) {
-	roomID, err := strconv.ParseInt(req.PathValue("id"), 10, 64)
-	if err != nil {
-		http.Error(w, "bad room id", 400)
+	r, ok := h.getRoom(req.PathValue("id"))
+	if !ok {
+		http.Error(w, `{"error":"room not found"}`, 404)
 		return
 	}
 	conn, err := websocket.Accept(w, req, nil)
@@ -119,11 +117,9 @@ func (h *Hub) Handle(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	user := auth.From(req)
-	r := h.room(roomID)
-	c := &client{user: user, send: make(chan []byte, 32)}
-
 	ctx, cancel := context.WithCancel(req.Context())
 	defer cancel()
+	c := &client{user: user, send: make(chan []byte, 32), cancel: cancel}
 	go func() { // writer
 		for b := range c.send {
 			if conn.Write(ctx, websocket.MessageText, b) != nil {
@@ -161,7 +157,7 @@ func (h *Hub) Handle(w http.ResponseWriter, req *http.Request) {
 	}
 }
 
-func (h *Hub) dispatch(r *room, c *client, m inMsg) {
+func (h *Hub) dispatch(r *Room, c *client, m inMsg) {
 	switch m.Type {
 	case "ping":
 		select {
@@ -170,62 +166,51 @@ func (h *Hub) dispatch(r *room, c *client, m inMsg) {
 		}
 
 	case "chat":
+		// In-memory broadcast only; the ring buffer + hello history land in task 5.
 		if len(m.Body) == 0 || len(m.Body) > 2000 {
 			return
 		}
 		now := time.Now().Unix()
-		if _, err := h.db.Exec(`INSERT INTO messages (room_id, user_id, body, created_at) VALUES (?,?,?,?)`, r.id, c.user.ID, m.Body, now); err != nil {
-			log.Println("chat insert:", err) // still broadcast: ephemeral delivery beats a dropped message
-		}
 		r.mu.Lock()
 		r.broadcast(marshal(map[string]any{"type": "chat", "userId": c.user.ID, "username": c.user.Username, "body": m.Body, "createdAt": now}))
 		r.mu.Unlock()
 
 	case "start":
-		var status string
-		if h.db.QueryRow(`SELECT status FROM media WHERE id=? AND kind='movie'`, m.MediaID).Scan(&status) != nil || status != "ready" {
+		if !h.mediaReady(m.MediaID) {
 			select {
 			case c.send <- marshal(map[string]any{"type": "error", "body": "media not ready"}):
-			default: // ponytail: dropped frame beats leaked goroutine; client re-pings in 10s
+			default:
 			}
 			return
 		}
 		st := NewWatch(m.MediaID, nowMs())
-
 		r.mu.Lock()
-		// ponytail: DB writes under room mutex; fine at 10 users, move off-lock if rooms ever get hot
-		if r.actState != nil {
-			h.db.Exec(`UPDATE activities SET status='ended', ended_at=unixepoch() WHERE id=?`, r.actID)
-		}
-		res, err := h.db.Exec(`INSERT INTO activities (room_id, type, state_json) VALUES (?,?,?)`, r.id, "watch", string(marshal(st)))
-		if err != nil {
-			r.mu.Unlock()
-			log.Println("start activity:", err)
-			return
-		}
-		id, _ := res.LastInsertId()
-		r.actID, r.actState = id, &st
+		r.watch = &st
 		r.broadcast(marshal(map[string]any{"type": "activity", "activity": r.activityJSON()}))
 		r.mu.Unlock()
 
 	case "end":
 		r.mu.Lock()
-		if r.actState != nil {
-			h.db.Exec(`UPDATE activities SET status='ended', ended_at=unixepoch() WHERE id=?`, r.actID)
-			r.actState = nil
+		if r.watch != nil {
+			r.watch = nil
 			r.broadcast(marshal(map[string]any{"type": "activity", "activity": nil}))
 		}
 		r.mu.Unlock()
 
 	case "intent":
 		r.mu.Lock()
-		if r.actState != nil {
-			if next, err := r.actState.Apply(m.Action, m.Position, nowMs()); err == nil {
-				r.actState = &next
-				h.db.Exec(`UPDATE activities SET state_json=? WHERE id=?`, string(marshal(next)), r.actID)
+		if r.watch != nil {
+			if next, err := r.watch.Apply(m.Action, m.Position, nowMs()); err == nil {
+				r.watch = &next
 				r.broadcast(marshal(map[string]any{"type": "activity", "activity": r.activityJSON()}))
 			}
 		}
 		r.mu.Unlock()
 	}
+}
+
+// mediaReady reports whether a media row exists and is ready to play.
+func (h *Hub) mediaReady(id int64) bool {
+	var status string
+	return h.db.QueryRow(`SELECT status FROM media WHERE id=?`, id).Scan(&status) == nil && status == "ready"
 }
