@@ -19,7 +19,12 @@ func mediaPath(d *sql.DB, id int64) (string, bool) {
 	return fp.String, status == "ready" && fp.Valid
 }
 
-func ServeRoutes(mux *http.ServeMux, d *sql.DB, dataDir string) {
+// ServeRoutes mounts the library list, admin delete, and the three
+// room-scoped media-byte routes. roomGate is live.RequireRoom's media
+// variant (live.Hub.RequireRoomMedia), supplied by cmd/server/main.go — this
+// package must not import internal/live (ARCHITECTURE §7 module direction),
+// so the gate arrives as a plain middleware value instead.
+func ServeRoutes(mux *http.ServeMux, d *sql.DB, dataDir string, roomGate func(http.HandlerFunc) http.HandlerFunc) {
 	mux.HandleFunc("GET /api/media", auth.Require(d, false, func(w http.ResponseWriter, r *http.Request) {
 		u := auth.From(r)
 		q := `SELECT id, kind, title, status, COALESCE(duration,0), COALESCE(size_bytes,0), COALESCE(error,'') FROM media`
@@ -73,7 +78,7 @@ func ServeRoutes(mux *http.ServeMux, d *sql.DB, dataDir string) {
 	}))
 
 	serve := func(download bool) http.HandlerFunc {
-		return auth.Require(d, false, func(w http.ResponseWriter, r *http.Request) {
+		return roomGate(func(w http.ResponseWriter, r *http.Request) {
 			id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
 			fp, ok := mediaPath(d, id)
 			if !ok {
@@ -89,7 +94,7 @@ func ServeRoutes(mux *http.ServeMux, d *sql.DB, dataDir string) {
 	mux.HandleFunc("GET /media/{id}/stream", serve(false))
 	mux.HandleFunc("GET /media/{id}/download", serve(true))
 
-	mux.HandleFunc("GET /media/{id}/subs/{sid}", auth.Require(d, false, func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /media/{id}/subs/{sid}", roomGate(func(w http.ResponseWriter, r *http.Request) {
 		sid, _ := strconv.ParseInt(r.PathValue("sid"), 10, 64)
 		mid, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
 		// Gate on parent media readiness

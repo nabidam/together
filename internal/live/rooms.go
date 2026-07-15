@@ -1,9 +1,11 @@
 package live
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -55,10 +57,6 @@ func (h *Hub) Routes(mux *http.ServeMux) {
 	// patterns where neither is uniformly more specific than the other. One
 	// wildcard route dispatches by hand instead of fighting the mux over it.
 	//
-	// ponytail: meta needs the room-auth gate (account session OR guest
-	// session scoped to this room), which is task 4's live.RequireRoom.
-	// Mounted behind plain account auth for now so the route exists and its
-	// response shape is locked in; task 4 swaps the middleware only.
 	mux.HandleFunc("GET /api/rooms/{tail...}", h.roomsGetDispatch)
 }
 
@@ -70,7 +68,7 @@ func (h *Hub) roomsGetDispatch(w http.ResponseWriter, r *http.Request) {
 		h.peekRoom(w, r)
 	case strings.HasSuffix(tail, "/meta"):
 		r.SetPathValue("id", strings.TrimSuffix(tail, "/meta"))
-		auth.Require(h.db, false, h.roomMeta)(w, r)
+		h.RequireRoom(h.roomMeta)(w, r)
 	default:
 		writeErr(w, 404, "not found")
 	}
@@ -80,6 +78,87 @@ func (h *Hub) roomsGetDispatch(w http.ResponseWriter, r *http.Request) {
 // here): Secure once TLS-terminated by Caddy, plain http only in dev/tests.
 func secureCookie(r *http.Request) bool {
 	return r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
+}
+
+// guestCtxKey scopes the context value RequireRoom/RequireRoomMedia attach
+// for guest connections. Deliberately a separate, package-private key from
+// auth's own (which live cannot construct — it's unexported in package
+// auth): the account path below delegates to auth.Require itself so
+// downstream auth.From(r) keeps working unmodified for account connections.
+type guestCtxKey struct{}
+
+// GuestFrom returns the GuestSession a request authenticated as, if it came
+// through RequireRoom/RequireRoomMedia as a guest rather than an account. ok
+// is false for account connections and for requests that never passed one of
+// those gates.
+func GuestFrom(r *http.Request) (gs *GuestSession, ok bool) {
+	gs, ok = r.Context().Value(guestCtxKey{}).(*GuestSession)
+	return gs, ok
+}
+
+// requireGuestOr is the shared room-scoped gate behind RequireRoom and
+// RequireRoomMedia (ARCHITECTURE §2, §4.4): a valid account session (any
+// account — accounts have library-wide access) passes unconditionally,
+// delegated to auth.Require so it also installs auth's own request context.
+// Absent an account session, a together_guest cookie must resolve to a live
+// GuestSession that satisfies match; on success the session is attached via
+// guestCtxKey. No credential at all → 401. A guest cookie that fails match
+// (wrong room/media, unknown token, or a torn-down room) → 404 — the same
+// body as "not found", so a guest probing outside its room gets no oracle
+// (§8, no-oracle — the same discipline as roomByToken).
+func (h *Hub) requireGuestOr(next http.HandlerFunc, match func(r *http.Request, gs *GuestSession) bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if c, err := r.Cookie("session"); err == nil {
+			if _, err := auth.UserByToken(h.db, c.Value); err == nil {
+				auth.Require(h.db, false, next)(w, r)
+				return
+			}
+		}
+
+		c, err := r.Cookie("together_guest")
+		if err != nil {
+			writeErr(w, 401, "unauthorized")
+			return
+		}
+		h.mu.Lock()
+		gs, ok := h.guests[c.Value]
+		h.mu.Unlock()
+		if !ok || !match(r, gs) {
+			writeErr(w, 404, "not found")
+			return
+		}
+		next(w, r.WithContext(context.WithValue(r.Context(), guestCtxKey{}, gs)))
+	}
+}
+
+// RequireRoom gates room-id routes — /ws/{id} and /api/rooms/{id}/meta —
+// where the {id} path segment IS the room id: a guest passes iff its
+// session's roomID matches that id.
+func (h *Hub) RequireRoom(next http.HandlerFunc) http.HandlerFunc {
+	return h.requireGuestOr(next, func(r *http.Request, gs *GuestSession) bool {
+		return gs.roomID == r.PathValue("id")
+	})
+}
+
+// RequireRoomMedia gates media-byte routes — /media/{id}/download,
+// /media/{id}/stream, /media/{id}/subs/{sid} — where {id} is a MEDIA id, not
+// a room id: a guest passes iff its room still exists and that room's
+// mediaID equals the path media id. A guest session grants exactly one
+// room's media, nothing else in the library (§4.4).
+func (h *Hub) RequireRoomMedia(next http.HandlerFunc) http.HandlerFunc {
+	return h.requireGuestOr(next, func(r *http.Request, gs *GuestSession) bool {
+		mediaID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil {
+			return false
+		}
+		rm, ok := h.getRoom(gs.roomID)
+		if !ok {
+			return false
+		}
+		rm.mu.Lock()
+		defer rm.mu.Unlock()
+		return rm.mediaID == mediaID
+	})
 }
 
 // sanitizeGuestName strips control characters and enforces the 1–32 char

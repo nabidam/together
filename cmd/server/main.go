@@ -66,8 +66,8 @@ func main() {
 	auth.Routes(mux, d)
 	hub.Routes(mux)
 	media.UploadRoutes(mux, d, dataDir)
-	media.ServeRoutes(mux, d, dataDir)
-	mux.HandleFunc("GET /ws/{id}", auth.Require(d, false, hub.Handle))
+	media.ServeRoutes(mux, d, dataDir, hub.RequireRoomMedia)
+	mux.HandleFunc("GET /ws/{id}", hub.RequireRoom(hub.Handle))
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })
 	spa(mux)
 

@@ -26,7 +26,13 @@ func TestStreamSupportsRangeAndAuth(t *testing.T) {
 
 	mux := http.NewServeMux()
 	auth.Routes(mux, d)
-	ServeRoutes(mux, d, dir)
+	// The real gate is internal/live's RequireRoom (account OR room-scoped
+	// guest); this package must not import internal/live (ARCHITECTURE §7),
+	// so account-path coverage here uses auth.Require directly as the room
+	// gate stand-in — RequireRoomMedia's guest-scoping logic itself is
+	// exercised against the real hub in internal/live/rooms_test.go.
+	acctGate := func(next http.HandlerFunc) http.HandlerFunc { return auth.Require(d, false, next) }
+	ServeRoutes(mux, d, dir, acctGate)
 	ts := httptest.NewServer(mux)
 	defer ts.Close()
 
@@ -68,7 +74,13 @@ func TestMediaKindFilterV2Vocabulary(t *testing.T) {
 
 	mux := http.NewServeMux()
 	auth.Routes(mux, d)
-	ServeRoutes(mux, d, dir)
+	// The real gate is internal/live's RequireRoom (account OR room-scoped
+	// guest); this package must not import internal/live (ARCHITECTURE §7),
+	// so account-path coverage here uses auth.Require directly as the room
+	// gate stand-in — RequireRoomMedia's guest-scoping logic itself is
+	// exercised against the real hub in internal/live/rooms_test.go.
+	acctGate := func(next http.HandlerFunc) http.HandlerFunc { return auth.Require(d, false, next) }
+	ServeRoutes(mux, d, dir, acctGate)
 	ts := httptest.NewServer(mux)
 	defer ts.Close()
 
@@ -95,6 +107,49 @@ func TestMediaKindFilterV2Vocabulary(t *testing.T) {
 		if l["kind"] == "movie" || l["kind"] == "music" {
 			t.Fatalf("V1 vocabulary leaked into library: %+v", l)
 		}
+	}
+}
+
+// TestDownloadAttachmentVsStreamInline (task 4 AC): /media/{id}/download sets
+// Content-Disposition: attachment and supports Range like stream; the stream
+// route stays inline (no attachment header at all).
+func TestDownloadAttachmentVsStreamInline(t *testing.T) {
+	dir := t.TempDir()
+	d, _ := db.Open(filepath.Join(dir, "t.db"))
+	defer d.Close()
+	auth.Seed(d, "admin", "password")
+	fp := filepath.Join(dir, "1.mp4")
+	os.WriteFile(fp, []byte("0123456789"), 0o644)
+	d.Exec(`INSERT INTO media (kind, title, status, file_path, size_bytes) VALUES ('video','M','ready',?,10)`, fp)
+
+	mux := http.NewServeMux()
+	auth.Routes(mux, d)
+	acctGate := func(next http.HandlerFunc) http.HandlerFunc { return auth.Require(d, false, next) }
+	ServeRoutes(mux, d, dir, acctGate)
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	jar, _ := cookiejar.New(nil)
+	c := &http.Client{Jar: jar}
+	c.Post(ts.URL+"/api/login", "application/json", strings.NewReader(`{"username":"admin","password":"password"}`))
+
+	req, _ := http.NewRequest("GET", ts.URL+"/media/1/download", nil)
+	req.Header.Set("Range", "bytes=2-4")
+	req.AddCookie(cookieFrom(t, jar, ts.URL))
+	r, _ := http.DefaultClient.Do(req)
+	if r.StatusCode != 206 {
+		t.Fatalf("download with Range: want 206 got %d", r.StatusCode)
+	}
+	if cd := r.Header.Get("Content-Disposition"); !strings.Contains(cd, "attachment") {
+		t.Fatalf("download must set Content-Disposition: attachment, got %q", cd)
+	}
+
+	r2, _ := c.Get(ts.URL + "/media/1/stream")
+	if r2.StatusCode != 200 {
+		t.Fatalf("stream: want 200 got %d", r2.StatusCode)
+	}
+	if cd := r2.Header.Get("Content-Disposition"); cd != "" {
+		t.Fatalf("stream must be inline (no Content-Disposition), got %q", cd)
 	}
 }
 
@@ -133,7 +188,13 @@ func TestSubtitleGatingOnMediaReady(t *testing.T) {
 
 	mux := http.NewServeMux()
 	auth.Routes(mux, d)
-	ServeRoutes(mux, d, dir)
+	// The real gate is internal/live's RequireRoom (account OR room-scoped
+	// guest); this package must not import internal/live (ARCHITECTURE §7),
+	// so account-path coverage here uses auth.Require directly as the room
+	// gate stand-in — RequireRoomMedia's guest-scoping logic itself is
+	// exercised against the real hub in internal/live/rooms_test.go.
+	acctGate := func(next http.HandlerFunc) http.HandlerFunc { return auth.Require(d, false, next) }
+	ServeRoutes(mux, d, dir, acctGate)
 	ts := httptest.NewServer(mux)
 	defer ts.Close()
 

@@ -5,9 +5,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+
+	"together/internal/auth"
+	"together/internal/db"
 )
 
 // post is a small JSON helper returning status + decoded body.
@@ -477,5 +482,110 @@ func TestRoomMeta(t *testing.T) {
 	code, _ = doReq(t, "GET", ts.URL, "/api/rooms/nope/meta", alice)
 	if code != 404 {
 		t.Fatalf("unknown room meta want 404 got %d", code)
+	}
+}
+
+// --- Task 4: RequireRoom / RequireRoomMedia ---
+
+// newRoomGateStack is a second, self-contained stack (distinct from
+// newStack in hub_test.go) seeded with TWO ready media rows and TWO rooms so
+// guest-vs-wrong-room/media scoping has something to fail against. It mounts
+// /ws/{id} behind the real hub.RequireRoom and a stand-in media-byte route
+// behind the real hub.RequireRoomMedia — a tiny inline handler instead of
+// internal/media.ServeRoutes, because internal/live must not import
+// internal/media (ARCHITECTURE §7 module direction); RequireRoomMedia's
+// gating logic is exactly the same either way, and the real ServeFile/
+// attachment-header behavior is covered on the account path in
+// internal/media/serve_test.go.
+func newRoomGateStack(t *testing.T) (ts *httptest.Server, hub *Hub, alice, bob string) {
+	t.Helper()
+	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { d.Close() })
+	auth.Seed(d, "alice", "password") // id 1, admin
+	bh, bs := auth.Hash("password")
+	d.Exec(`INSERT INTO users (username, pass_hash, salt) VALUES ('bob', ?, ?)`, bh, bs)                                   // id 2, member
+	d.Exec(`INSERT INTO media (kind, title, status, file_path, size_bytes) VALUES ('video','Movie A','ready','a.mp4',10)`) // id 1
+	d.Exec(`INSERT INTO media (kind, title, status, file_path, size_bytes) VALUES ('video','Movie B','ready','b.mp4',10)`) // id 2
+
+	h := NewHub(d)
+	mux := http.NewServeMux()
+	h.Routes(mux)
+	mux.HandleFunc("GET /ws/{id}", h.RequireRoom(h.Handle))
+	mux.HandleFunc("GET /media/{id}/probe", h.RequireRoomMedia(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+	}))
+	s := httptest.NewServer(mux)
+	t.Cleanup(s.Close)
+
+	tok1, _ := auth.CreateSession(d, 1)
+	tok2, _ := auth.CreateSession(d, 2)
+	return s, h, "session=" + tok1, "session=" + tok2
+}
+
+func TestRequireRoom_MetaEndpoint(t *testing.T) {
+	ts, _, alice, bob := newRoomGateStack(t)
+	roomA, _ := createRoom(t, ts, alice, 1, "")
+
+	// no credential at all → 401
+	if code, _ := doReq(t, "GET", ts.URL, "/api/rooms/"+roomA+"/meta", ""); code != 401 {
+		t.Fatalf("no credential want 401 got %d", code)
+	}
+
+	// any account (not just the host) passes — bob is a non-host member
+	if code, _ := doReq(t, "GET", ts.URL, "/api/rooms/"+roomA+"/meta", bob); code != 200 {
+		t.Fatalf("non-host account want 200 got %d", code)
+	}
+}
+
+func TestRequireRoom_GuestScopedToOwnRoom(t *testing.T) {
+	ts, _, alice, _ := newRoomGateStack(t)
+	roomA, tokA := createRoom(t, ts, alice, 1, "Room A")
+	roomB, tokB := createRoom(t, ts, alice, 2, "Room B")
+
+	_, _, guestA := postJoin(t, ts.URL, tokA, "Ali", "")
+	_, _, guestB := postJoin(t, ts.URL, tokB, "Bea", "")
+
+	// a guest's own room's meta → 200
+	if code, _ := doReq(t, "GET", ts.URL, "/api/rooms/"+roomA+"/meta", "together_guest="+guestA); code != 200 {
+		t.Fatalf("guest A on room A want 200 got %d", code)
+	}
+	// a guest reaching another room → 404 (no oracle vs unknown room)
+	if code, _ := doReq(t, "GET", ts.URL, "/api/rooms/"+roomB+"/meta", "together_guest="+guestA); code != 404 {
+		t.Fatalf("guest A on room B want 404 got %d", code)
+	}
+	if code, _ := doReq(t, "GET", ts.URL, "/api/rooms/"+roomA+"/meta", "together_guest="+guestB); code != 404 {
+		t.Fatalf("guest B on room A want 404 got %d", code)
+	}
+	// garbage/never-issued guest cookie → 404, same shape as a real mismatch
+	if code, _ := doReq(t, "GET", ts.URL, "/api/rooms/"+roomA+"/meta", "together_guest=nope"); code != 404 {
+		t.Fatalf("unknown guest cookie want 404 got %d", code)
+	}
+}
+
+func TestRequireRoomMedia_GuestScopedToOwnRoomMedia(t *testing.T) {
+	ts, _, alice, _ := newRoomGateStack(t)
+	_, tokA := createRoom(t, ts, alice, 1, "Room A") // room A's media is id 1
+	createRoom(t, ts, alice, 2, "Room B")            // room B's media is id 2
+
+	_, _, guestA := postJoin(t, ts.URL, tokA, "Ali", "")
+
+	// guest downloads/probes its own room's media → 200
+	if code, _ := doReq(t, "GET", ts.URL, "/media/1/probe", "together_guest="+guestA); code != 200 {
+		t.Fatalf("guest A on media 1 want 200 got %d", code)
+	}
+	// guest reaching any other media id → 404, no oracle
+	if code, _ := doReq(t, "GET", ts.URL, "/media/2/probe", "together_guest="+guestA); code != 404 {
+		t.Fatalf("guest A on media 2 want 404 got %d", code)
+	}
+	// no credential at all → 401
+	if code, _ := doReq(t, "GET", ts.URL, "/media/1/probe", ""); code != 401 {
+		t.Fatalf("no credential want 401 got %d", code)
+	}
+	// an account session passes regardless of which media
+	if code, _ := doReq(t, "GET", ts.URL, "/media/2/probe", alice); code != 200 {
+		t.Fatalf("account on any media want 200 got %d", code)
 	}
 }
