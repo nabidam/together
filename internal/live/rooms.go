@@ -450,19 +450,44 @@ func (h *Hub) isHost(rm *Room, u auth.User) bool {
 	return rm.ownerID == u.ID || u.Role == "admin"
 }
 
-// teardown removes a room from the hub and signals its live connections to
-// close. Each connection's own Handle defer performs the channel close and
-// client removal, so teardown must not close send here (double close panics).
-// This is the v0 path (task 2); task 6 adds the room_closed broadcast, empty
-// timer, and per-room recover around this same code path.
+// teardown is the ONE code path behind all three triggers (host DELETE,
+// empty-timer fire, per-room panic recovery — ARCHITECTURE §5/§8). Order:
+// broadcast room_closed -> close sockets -> cancel timer -> delete room from
+// map -> drop its guest sessions -> token forgotten. Nothing touches SQLite.
+//
+// "Close sockets" here means closing each client's send channel (via
+// closeOnce, shared with the Handle defer so whichever runs first wins) —
+// NOT calling c.cancel(). The room_closed frame was just enqueued ahead of
+// that close in the same channel; the writer goroutine drains it before it
+// notices the channel is closed, so the frame is actually delivered before
+// the connection goes away. A hard ctx cancel here would race that delivery
+// and could drop the frame instead.
+//
+// rm.closed makes the whole thing idempotent: a host DELETE racing a timer
+// fire, or a panic while another trigger is mid-teardown, is a no-op on
+// whichever call arrives second.
 func (h *Hub) teardown(rm *Room) {
-	h.mu.Lock()
-	delete(h.rooms, rm.id)
-	h.mu.Unlock()
-
 	rm.mu.Lock()
+	if rm.closed {
+		rm.mu.Unlock()
+		return
+	}
+	rm.closed = true
+	rm.broadcast(marshal(map[string]any{"type": "room_closed"}))
 	for c := range rm.clients {
-		c.cancel() // unblocks the reader/writer; its defer closes send + drops the client
+		c.closeOnce.Do(func() { close(c.send) })
+	}
+	if rm.emptyTimer != nil {
+		rm.emptyTimer.Stop()
 	}
 	rm.mu.Unlock()
+
+	h.mu.Lock()
+	delete(h.rooms, rm.id)
+	for tok, gs := range h.guests {
+		if gs.roomID == rm.id {
+			delete(h.guests, tok)
+		}
+	}
+	h.mu.Unlock()
 }

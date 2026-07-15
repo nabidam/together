@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"together/internal/auth"
 	"together/internal/db"
@@ -178,7 +179,7 @@ func TestRoomsAreEphemeral(t *testing.T) {
 	createRoom(t, ts, alice, 1, "")
 
 	// simulate a restart: a new hub over the same durable DB
-	fresh := NewHub(d)
+	fresh := NewHub(d, 30*time.Minute)
 	fresh.mu.Lock()
 	n := len(fresh.rooms)
 	fresh.mu.Unlock()
@@ -254,7 +255,7 @@ func TestSanitizeGuestName(t *testing.T) {
 }
 
 func TestSuffixNameLocked_CollisionAndDeparture(t *testing.T) {
-	h := NewHub(nil)
+	h := NewHub(nil, 30*time.Minute)
 	h.guests["t1"] = &GuestSession{guestID: "g1", roomID: "room1", name: "Alice"}
 
 	h.mu.Lock()
@@ -510,7 +511,7 @@ func newRoomGateStack(t *testing.T) (ts *httptest.Server, hub *Hub, alice, bob s
 	d.Exec(`INSERT INTO media (kind, title, status, file_path, size_bytes) VALUES ('video','Movie A','ready','a.mp4',10)`) // id 1
 	d.Exec(`INSERT INTO media (kind, title, status, file_path, size_bytes) VALUES ('video','Movie B','ready','b.mp4',10)`) // id 2
 
-	h := NewHub(d)
+	h := NewHub(d, 30*time.Minute)
 	mux := http.NewServeMux()
 	h.Routes(mux)
 	mux.HandleFunc("GET /ws/{id}", h.RequireRoom(h.Handle))

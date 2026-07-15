@@ -59,7 +59,11 @@ func main() {
 	}
 	auth.GC(d)
 
-	hub := live.NewHub(d)
+	idle, err := time.ParseDuration(env("TOGETHER_ROOM_IDLE", "30m"))
+	if err != nil {
+		log.Fatal("bad TOGETHER_ROOM_IDLE: ", err)
+	}
+	hub := live.NewHub(d, idle)
 
 	mux := http.NewServeMux()
 	// ponytail: SameSite=Lax + HttpOnly suffices behind TLS proxy on private instance

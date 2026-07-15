@@ -1,12 +1,15 @@
 package live
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -23,7 +26,17 @@ type frame map[string]any
 // newStack spins the full room stack (lifecycle routes + WS) over a temp DB
 // seeded with two accounts (alice=1 admin, bob=2 member) and one ready video
 // media row (id 1). Returns the server plus each account's session cookie.
+// Uses a 30m TOGETHER_ROOM_IDLE — irrelevant to everything except task 6's
+// timer tests, which use newStackIdle instead to get a test-fast duration.
 func newStack(t *testing.T) (*httptest.Server, *Hub, *sql.DB, string, string) {
+	t.Helper()
+	return newStackIdle(t, 30*time.Minute)
+}
+
+// newStackIdle is newStack with an injectable TOGETHER_ROOM_IDLE (AC-5.3):
+// task 6's empty-timer tests need a millisecond-scale idle window instead of
+// the real 30m default so the suite stays fast.
+func newStackIdle(t *testing.T, idle time.Duration) (*httptest.Server, *Hub, *sql.DB, string, string) {
 	t.Helper()
 	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
 	if err != nil {
@@ -35,7 +48,7 @@ func newStack(t *testing.T) (*httptest.Server, *Hub, *sql.DB, string, string) {
 	d.Exec(`INSERT INTO users (username, pass_hash, salt) VALUES ('bob', ?, ?)`, bh, bs) // id 2, member
 	d.Exec(`INSERT INTO media (kind, title, status, file_path, size_bytes) VALUES ('video','The Movie','ready','x.mp4',10)`)
 
-	hub := NewHub(d)
+	hub := NewHub(d, idle)
 	mux := http.NewServeMux()
 	hub.Routes(mux)
 	// Mounted under the real room gate (not bare auth.Require) so a guest
@@ -357,6 +370,187 @@ func TestGuestDialAppearsInPresenceAndChat(t *testing.T) {
 	send(t, g, frame{"type": "chat", "body": "hi from guest"})
 	if f := waitFor(t, a, "chat"); f["name"] != "Casey" || f["isGuest"] != true || f["body"] != "hi from guest" {
 		t.Fatalf("guest chat frame wrong: %+v", f)
+	}
+}
+
+// --- Task 6: teardown path, empty timer, per-room recover ---
+
+// TestDeleteRoom_RoomClosedThenSocketsClose covers the host-DELETE trigger
+// of the ARCHITECTURE §5 teardown path: both connected clients must receive
+// the room_closed frame BEFORE their sockets close (task 6's critical
+// subtlety — a hard ctx cancel would drop the buffered frame instead), the
+// room and its guest sessions must be gone from the hub, and the dead join
+// token must 404.
+func TestDeleteRoom_RoomClosedThenSocketsClose(t *testing.T) {
+	ts, hub, _, alice, bob := newStack(t)
+	room, tok := createRoom(t, ts, alice, 1, "")
+
+	a := dial(t, ts, room, alice)
+	read(t, a) // hello
+	b := dial(t, ts, room, bob)
+	read(t, b)                // hello
+	waitFor(t, a, "presence") // a observes b joining
+
+	// A guest with a live cookie but no open WS connection — teardown must
+	// still drop its session from Hub.guests even though it never had a
+	// *client* to close.
+	joinAsGuest(t, ts, tok, "Casey")
+	hub.mu.Lock()
+	guestsBefore := len(hub.guests)
+	hub.mu.Unlock()
+	if guestsBefore != 1 {
+		t.Fatalf("want 1 guest session before teardown, got %d", guestsBefore)
+	}
+
+	if code, _ := doReq(t, "DELETE", ts.URL, "/api/rooms/"+room, alice); code != 200 {
+		t.Fatalf("host delete want 200 got %d", code)
+	}
+
+	// Both survivors must receive room_closed...
+	for name, c := range map[string]*websocket.Conn{"a": a, "b": b} {
+		if f := waitFor(t, c, "room_closed"); f == nil {
+			t.Fatalf("%s never received room_closed", name)
+		}
+	}
+	// ...and only THEN see their socket close (next read errors out).
+	for name, c := range map[string]*websocket.Conn{"a": a, "b": b} {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		_, _, err := c.Read(ctx)
+		cancel()
+		if err == nil {
+			t.Fatalf("%s socket should be closed after room_closed", name)
+		}
+	}
+
+	if _, ok := hub.getRoom(room); ok {
+		t.Fatal("room should be gone from the hub after teardown")
+	}
+	hub.mu.Lock()
+	guestsAfter := len(hub.guests)
+	hub.mu.Unlock()
+	if guestsAfter != 0 {
+		t.Fatalf("guest sessions must be dropped at teardown, got %d", guestsAfter)
+	}
+
+	if code, _, _ := postJoin(t, ts.URL, tok, "Late", ""); code != 404 {
+		t.Fatalf("join on the old token after teardown want 404 got %d", code)
+	}
+}
+
+// TestEmptyRoomTimer_FiresAfterIdle: with a ~50ms TOGETHER_ROOM_IDLE, the
+// last live WS connection closing starts the timer, and a guest session
+// that was minted over HTTP but never dialed WS does not count as a live
+// connection — it must not keep the room warm past the fire.
+func TestEmptyRoomTimer_FiresAfterIdle(t *testing.T) {
+	ts, hub, _, alice, _ := newStackIdle(t, 50*time.Millisecond)
+	room, tok := createRoom(t, ts, alice, 1, "")
+
+	a := dial(t, ts, room, alice)
+	read(t, a) // hello
+
+	joinAsGuest(t, ts, tok, "Ghost") // cookie'd, never dials WS
+
+	a.CloseNow() // the only live connection drops -> emptyTimer.Reset(idle)
+
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if _, ok := hub.getRoom(room); !ok {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("empty room was not torn down after TOGETHER_ROOM_IDLE fired")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	hub.mu.Lock()
+	n := len(hub.guests)
+	hub.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("the ghost guest session should be dropped by teardown too, got %d", n)
+	}
+}
+
+// TestEmptyRoomTimer_RejoinWithinIdleStopsIt verifies the Stop()-on-join
+// half of AC-5.3: a rejoin inside the idle window must cancel the pending
+// fire, so the room survives past what would have been the original
+// deadline had the timer not been stopped.
+func TestEmptyRoomTimer_RejoinWithinIdleStopsIt(t *testing.T) {
+	idle := 150 * time.Millisecond
+	ts, hub, _, alice, _ := newStackIdle(t, idle)
+	room, _ := createRoom(t, ts, alice, 1, "")
+
+	a := dial(t, ts, room, alice)
+	read(t, a)   // hello
+	a.CloseNow() // starts the idle timer, deadline ~= now + 150ms
+
+	time.Sleep(50 * time.Millisecond) // well inside the window
+
+	b := dial(t, ts, room, alice) // rejoin -> Stop()
+	read(t, b)                    // hello
+
+	// Past the ORIGINAL deadline (50ms + 200ms > 150ms) with a healthy
+	// margin: if Stop() hadn't run, the room would already be gone by now.
+	time.Sleep(200 * time.Millisecond)
+
+	if _, ok := hub.getRoom(room); !ok {
+		t.Fatal("a rejoin inside the idle window must keep the room alive past the original deadline")
+	}
+}
+
+// TestRoomPanic_TearsDownOnlyThatRoom exercises the per-room recover
+// (NFR-7): a panic injected into room A's dispatch must be caught, logged
+// with room A's id, and torn down room A alone — room B's two independent
+// clients keep exchanging frames and the process stays up. Run with -race:
+// this is the concurrency-sensitive path in the whole task.
+func TestRoomPanic_TearsDownOnlyThatRoom(t *testing.T) {
+	ts, hub, _, alice, bob := newStack(t)
+	roomA, _ := createRoom(t, ts, alice, 1, "Room A")
+	roomB, _ := createRoom(t, ts, alice, 1, "Room B")
+
+	var logBuf bytes.Buffer
+	log.SetOutput(&logBuf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	a := dial(t, ts, roomA, alice)
+	read(t, a) // hello
+	rmA, ok := hub.getRoom(roomA)
+	if !ok {
+		t.Fatal("room A should exist before injecting a panic")
+	}
+	rmA.setPanicTrigger(func() { panic("injected for TestRoomPanic_TearsDownOnlyThatRoom") })
+
+	b1 := dial(t, ts, roomB, alice)
+	read(t, b1) // hello
+	b2 := dial(t, ts, roomB, bob)
+	read(t, b2)                // hello
+	waitFor(t, b1, "presence") // b1 observes b2 joining
+
+	// Any inbound frame on room A's connection now panics inside dispatch.
+	send(t, a, frame{"type": "chat", "body": "trigger"})
+
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if _, ok := hub.getRoom(roomA); !ok {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("room A was not torn down after the injected panic")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	if !strings.Contains(logBuf.String(), "room panic id="+roomA) {
+		t.Fatalf("panic log missing room A's id: %s", logBuf.String())
+	}
+
+	// Room B must be entirely unaffected: still registered, still live.
+	if _, ok := hub.getRoom(roomB); !ok {
+		t.Fatal("room B should be unaffected by room A's panic")
+	}
+	send(t, b1, frame{"type": "chat", "body": "still alive"})
+	if f := waitFor(t, b2, "chat"); f["body"] != "still alive" {
+		t.Fatalf("room B should still exchange frames after room A's panic: %+v", f)
 	}
 }
 
