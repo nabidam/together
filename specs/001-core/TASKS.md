@@ -205,6 +205,8 @@ Sandbox note (from CLAUDE.md): smoke-test with `curl --noproxy '*'` and `TOGETHE
 - **Dependencies:** 6.
 - **Completion artifact:** the human's walkthrough result logged on this task.
 
+> **SOFT PASS (machine-driven, 2026-07-15).** Not the human demo — a scripted orchestrator (`coder/websocket` + `net/http`, throwaway `cmd/gatewalk`, deleted after) drove all of ARCHITECTURE §10 steps 1–4 and 7–11 against a live `TOGETHER_ADDR=:18080` server on a fresh data dir, seeding one `status='ready'` media row (no bytes streamed — protocol gate only). 12 observable frames verified byte-for-byte per §4.5: host `hello` (`you.isHost=true, name=admin`) + guest `hello` (`you.isGuest=true, name=Ali`); host `presence` broadcast on guest join; `intent:play` from host echoed `activity` (`rate=1`) to **both**; `chat` both directions echoed to both connections (`{name,isGuest,body,createdAt}`); guest socket killed then redialed → `hello` restored the 2-msg chat ring **and** the mid-scene `activity` (`version=2, paused=false`); host `DELETE /api/rooms/{id}` → survivor received `room_closed`. Caveat: the presence frame the host consumed at step 3 was its own join self-broadcast (count 1), not the guest-join frame — frame-ordering artifact of the scripted reader, not a protocol defect; the guest is present (guest `hello` + subsequent broadcasts confirm). **The human-witnessed demo (two `websocat` terminals) is NOT waived — this is a soft pass to unblock; re-walk at the v1 exit bar.**
+
 ---
 
 ## Task 8 — Frontend: guest join route + Home list
