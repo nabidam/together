@@ -27,10 +27,10 @@
   <div class="min-h-dvh grid place-items-center">
     <span class="eyebrow">// connecting…</span>
   </div>
-{:else if !me}
-  <Login onlogin={(u) => (me = u)} />
 {:else if roomMatch}
   <Room {me} roomId={roomMatch[1]} />
+{:else if !me}
+  <Login onlogin={(u) => (me = u)} />
 {:else if route.path === "/admin" && me.role === "admin"}
   <Admin {me} />
 {:else}
