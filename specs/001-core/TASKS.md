@@ -282,6 +282,8 @@ Sandbox note (from CLAUDE.md): smoke-test with `curl --noproxy '*'` and `TOGETHE
 
 ## Task 11 — Blob player + status ladder + participant dots
 
+> **DONE** `f00aa9b` — Verified: `node --test web/src/lib/*.test.js`, `npm --prefix web run build`, `go test ./...`, `go test -race ./...`, `gofmt -l internal cmd`, and `git diff --check` pass. The compiled Room route mounts blob-source Player playback with arm-only echo-driven sync, sends the three status edges, keeps subtitle tracks server-backed, and renders presence status dots with title tooltips. Two-browser media playback is the required Task 12 demo-gate walkthrough.
+
 - **Objective:** Playback from the local file with the V1 sync discipline intact; readiness advertised via `status` frames and rendered as dots. (PLAN chunk 5, playback half.)
 - **Inputs:** Task 10's objectURL; task 9's WS bus.
 - **Outputs:** rewritten `Player.svelte`, new `Participants.svelte`, Room wiring.
