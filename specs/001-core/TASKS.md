@@ -87,6 +87,8 @@ Sandbox note (from CLAUDE.md): smoke-test with `curl --noproxy '*'` and `TOGETHE
 
 ## Task 3 — Guest sessions + public join surface
 
+> **DONE** `301d371` — Verified: `go test ./...` green (all packages), `go vet ./...` clean, `go test -race ./internal/live` clean, `gofmt -l internal cmd` empty. `rooms_test.go` drives the real stack (httptest, no WS): name-minting table tests (control-char strip, empty/33-char→400, `Sam`/`Sam (2)` collision, live-cookie re-join keeps identity with zero re-suffix and no second session, departed guest's name freed via direct `hub.guests` manipulation, cross-room names never collide); join with valid token → 200 + `together_guest` cookie; bad name → 400; 13th participant → 409 (12 succeed first); dead (regenerated-away) token and a never-existed token return byte-identical 404 bodies (no oracle); `GET /api/rooms/join/{token}` → `{roomName}` / 404 unknown; regenerate → old token 404, new token 200, previously-joined guest's cookie still accepted; `GET /api/rooms/{id}/meta` shape + 404 unknown room. Net/http `ServeMux` rejected co-registering `GET /api/rooms/join/{token}` and `GET /api/rooms/{id}/meta` (ambiguous wildcard position) — resolved with one `GET /api/rooms/{tail...}` route dispatching by hand.
+
 - **Objective:** Guests exist: in-memory sessions minted by a public join endpoint, plus the pre-join peek and room meta routes. (PLAN chunk 2, sessions half.)
 - **Inputs:** Task 2's `Room` + hub.
 - **Outputs:** hub `guests` map; `POST /api/rooms/join`, `GET /api/rooms/join/{token}`, `GET /api/rooms/{id}/meta` mounted.
