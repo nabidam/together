@@ -211,6 +211,8 @@ Sandbox note (from CLAUDE.md): smoke-test with `curl --noproxy '*'` and `TOGETHE
 
 ## Task 8 — Frontend: guest join route + Home list
 
+> **DONE** `3795100` — Verified: `cd web && npm run build` succeeds (generated `cmd/server/webdist/index.html` restored before commit); `go test ./...` and `go test -race ./...` pass; `gofmt -l internal cmd` is empty and `git diff --check` is clean. The compiled route flow puts `#/join/{token}` ahead of the `/api/me` gate, handles guest-cookie rejoin and terminal invalid/full states, and builds the authenticated live-room list/create dialog against the Task 3–4 API surface.
+
 - **Objective:** Guests can enter via `#/join/{token}` before the auth gate; account users see live rooms and create one. (PLAN chunk 4, entry half.)
 - **Inputs:** Tasks 3–4 endpoints live.
 - **Outputs:** `JoinGuest.svelte` (S6), `Home.svelte` (S3, renamed from `Rooms.svelte`), route wiring, `api.js` calls.
