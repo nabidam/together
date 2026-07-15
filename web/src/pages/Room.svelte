@@ -6,8 +6,10 @@
   import { revokeObjectURL } from "../lib/localfile.js";
   import AcquisitionPanel from "../components/AcquisitionPanel.svelte";
   import Chat from "../components/Chat.svelte";
+  import Participants from "../components/Participants.svelte";
+  import Player from "../components/Player.svelte";
   import RoomClosed from "../components/RoomClosed.svelte";
-  import { ArrowLeft, Circle, LoaderCircle } from "lucide-svelte";
+  import { ArrowLeft, LoaderCircle } from "lucide-svelte";
 
   let { me = null, roomId } = $props();
   let messages = $state([]);
@@ -78,7 +80,14 @@
 
   const ready = $derived(room !== null && media !== null);
   const disconnected = $derived(connection !== "connected");
-  const statusLabel = (status) => ({ downloading: "Downloading", file_ready: "File ready", in_sync: "In sync" })[status] ?? "Downloading";
+
+  // Re-announce the local edge after each socket connection. The Player will
+  // advance file_ready to in_sync once its drift loop is running again.
+  $effect(() => {
+    if (sock && connection === "connected") {
+      sock.send({ type: "status", state: playbackSource ? "file_ready" : "downloading" });
+    }
+  });
 </script>
 
 {#if closed}
@@ -105,9 +114,8 @@
     {:else}
       <div class="flex-1 min-h-0 flex flex-col md:flex-row">
         <section class="flex-1 min-h-0 relative">
-          {#if playbackSource}
-            <!-- svelte-ignore a11y_media_has_caption -->
-            <video class="w-full h-full bg-void object-contain" src={playbackSource} controls playsinline></video>
+          {#if playbackSource && activity}
+            <Player {activity} {sock} {media} source={playbackSource} />
           {:else if activity}
             <AcquisitionPanel {media} kind={room.kind} onsource={setPlaybackSource} />
           {:else}
@@ -115,19 +123,7 @@
           {/if}
         </section>
         <aside class="md:w-80 md:border-l border-t md:border-t-0 border-border h-[45%] md:h-auto shrink-0 flex flex-col">
-          <section class="p-4 border-b border-border">
-            <h2 class="text-fg-strong font-medium mb-3">Participants</h2>
-            <ul class="flex flex-col gap-2" aria-live="polite">
-              {#each users as user (`${user.name}-${user.isGuest}-${user.isHost}`)}
-                <li class="flex items-center gap-2 text-[15px] text-fg-strong">
-                  <Circle size={10} class={user.status === "in_sync" ? "fill-primary text-primary" : "text-secondary"} aria-hidden="true" />
-                  <span>{user.name}</span>
-                  {#if user.isHost}<span class="eyebrow text-primary">host</span>{/if}
-                  <span class="text-fg text-[13px] ml-auto">{statusLabel(user.status)}</span>
-                </li>
-              {/each}
-            </ul>
-          </section>
+          <Participants {users} />
           <div class="flex-1 min-h-0"><Chat {messages} disabled={disconnected} send={(body) => sock.send({ type: "chat", body })} /></div>
         </aside>
       </div>
