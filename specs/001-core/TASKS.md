@@ -119,6 +119,8 @@ Sandbox note (from CLAUDE.md): smoke-test with `curl --noproxy '*'` and `TOGETHE
 
 ## Task 4 — RequireRoom middleware + media routes rewired + download endpoint
 
+> **DONE** `b65378f` — Verified: `go test ./...` green (all packages), `go vet ./...` clean, `go test -race ./internal/live ./internal/media` clean, `gofmt -l internal cmd` empty. `internal/live/rooms_test.go` drives the real `hub.RequireRoom`/`hub.RequireRoomMedia`: no-credential request on `/api/rooms/{id}/meta` → 401; non-host account passes; guest scoped to its own room's meta → 200, guest reaching another room or an unknown/garbage guest cookie → 404 (byte-identical no-oracle shape); guest on its own room's media → 200, any other media id → 404, no credential → 401, account passes on any media. `internal/media/serve_test.go` drives the real `ServeFile`/header behavior on the account path (module direction forbids `media` importing `live`, so guest-scoping lives in the `live` tests): `/media/{id}/download` with Range → 206 + `Content-Disposition: attachment`; `/media/{id}/stream` → 200 inline, no attachment header; existing stream/subtitle/kind-filter tests still pass through the new `roomGate` parameter. `grep -rn 'together/internal/live' internal/media/*.go` empty — module-direction constraint intact.
+
 - **Objective:** One room-scoped gate for WS and media bytes; guests get exactly their room's media. (PLAN chunk 2, auth half.)
 - **Inputs:** Task 3's guest sessions.
 - **Outputs:** `live.RequireRoom` wrapping `/ws/{roomId}`, `/media/{id}/stream`, `/media/{id}/subs/{sid}`, new `/media/{id}/download`, and `/api/rooms/{id}/meta`.
