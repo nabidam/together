@@ -1,9 +1,11 @@
 <script>
+  import { untrack } from "svelte";
   import { get } from "../lib/api.js";
   import { go } from "../lib/router.svelte.js";
   import { connect } from "../lib/ws.js";
+  import { revokeObjectURL } from "../lib/localfile.js";
+  import AcquisitionPanel from "../components/AcquisitionPanel.svelte";
   import Chat from "../components/Chat.svelte";
-  import Player from "../components/Player.svelte";
   import RoomClosed from "../components/RoomClosed.svelte";
   import { ArrowLeft, Circle, LoaderCircle } from "lucide-svelte";
 
@@ -17,6 +19,7 @@
   let closed = $state(false);
   let loadError = $state("");
   let sock = $state(null);
+  let playbackSource = $state("");
 
   $effect(() => {
     let active = true;
@@ -25,6 +28,8 @@
     activity = null;
     room = null;
     media = null;
+    revokeObjectURL(untrack(() => playbackSource));
+    playbackSource = "";
     closed = false;
     loadError = "";
     connection = "connecting";
@@ -62,8 +67,14 @@
     return () => {
       active = false;
       sock?.close();
+      revokeObjectURL(untrack(() => playbackSource));
     };
   });
+
+  function setPlaybackSource(source) {
+    revokeObjectURL(playbackSource);
+    playbackSource = source;
+  }
 
   const ready = $derived(room !== null && media !== null);
   const disconnected = $derived(connection !== "connected");
@@ -94,8 +105,11 @@
     {:else}
       <div class="flex-1 min-h-0 flex flex-col md:flex-row">
         <section class="flex-1 min-h-0 relative">
-          {#if activity}
-            <Player {activity} {sock} {media} onend={() => sock.send({ type: "end" })} />
+          {#if playbackSource}
+            <!-- svelte-ignore a11y_media_has_caption -->
+            <video class="w-full h-full bg-void object-contain" src={playbackSource} controls playsinline></video>
+          {:else if activity}
+            <AcquisitionPanel {media} kind={room.kind} onsource={setPlaybackSource} />
           {:else}
             <div class="h-full grid place-items-center p-6"><p class="text-fg">Waiting for playback to begin.</p></div>
           {/if}
