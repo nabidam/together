@@ -255,6 +255,8 @@ Sandbox note (from CLAUDE.md): smoke-test with `curl --noproxy '*'` and `TOGETHE
 
 ---
 
+> **DONE** `f14fa70` — Verified: `node --test web/src/lib/ws.test.js` drives connection-state transitions and a V2 `hello` frame through the socket message bus; `npm --prefix web run build`, `go test ./...`, `go test -race ./...`, `gofmt -l internal cmd`, and `git diff --check` all pass. The room shell consumes `hello`/`presence`/`chat`/`activity`, disables chat while reconnecting, restores state from each `hello`, and replaces the view on `room_closed`.
+
 ## Task 10 — localfile.js + acquisition panel
 
 - **Objective:** The size-check gate: pick a local file, verify exact bytes against room meta, block mismatches inline. (PLAN chunk 5, acquisition half.)
