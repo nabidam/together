@@ -2,6 +2,8 @@ package live
 
 import (
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"regexp"
 	"strings"
@@ -183,5 +185,297 @@ func TestRoomsAreEphemeral(t *testing.T) {
 	d.QueryRow(`SELECT count(*) FROM users`).Scan(&users)
 	if media != 1 || users != 2 {
 		t.Fatalf("durable data must survive: media=%d users=%d", media, users)
+	}
+}
+
+// --- Task 3: guest sessions + public join surface ---
+
+// postJoin POSTs /api/rooms/join and returns the status, decoded body, and
+// the raw together_guest cookie value the response set (empty if none).
+func postJoin(t *testing.T, ts, token, name, cookie string) (int, map[string]any, string) {
+	t.Helper()
+	b, _ := json.Marshal(map[string]string{"token": token, "name": name})
+	req, _ := http.NewRequest("POST", ts+"/api/rooms/join", strings.NewReader(string(b)))
+	if cookie != "" {
+		req.Header.Set("Cookie", cookie)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	var out map[string]any
+	json.NewDecoder(res.Body).Decode(&out)
+	guestCookie := ""
+	for _, c := range res.Cookies() {
+		if c.Name == "together_guest" {
+			guestCookie = c.Value
+		}
+	}
+	return res.StatusCode, out, guestCookie
+}
+
+func TestSanitizeGuestName(t *testing.T) {
+	cases := []struct {
+		name    string
+		in      string
+		want    string
+		wantErr bool
+	}{
+		{"strips control chars", "Ali\x00ce\x07", "Alice", false},
+		{"empty after strip is 400", "\x00\x01", "", true},
+		{"empty string is 400", "", "", true},
+		{"32 chars is ok", strings.Repeat("a", 32), strings.Repeat("a", 32), false},
+		{"33 chars is 400", strings.Repeat("a", 33), "", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := sanitizeGuestName(c.in)
+			if c.wantErr {
+				if err == nil {
+					t.Fatalf("want error, got name %q", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != c.want {
+				t.Fatalf("got %q want %q", got, c.want)
+			}
+		})
+	}
+}
+
+func TestSuffixNameLocked_CollisionAndDeparture(t *testing.T) {
+	h := NewHub(nil)
+	h.guests["t1"] = &GuestSession{guestID: "g1", roomID: "room1", name: "Alice"}
+
+	h.mu.Lock()
+	got := h.suffixNameLocked("room1", "Alice")
+	h.mu.Unlock()
+	if got != "Alice (2)" {
+		t.Fatalf("want suffix on collision, got %q", got)
+	}
+
+	h.guests["t2"] = &GuestSession{guestID: "g2", roomID: "room1", name: "Alice (2)"}
+	h.mu.Lock()
+	got = h.suffixNameLocked("room1", "Alice")
+	h.mu.Unlock()
+	if got != "Alice (3)" {
+		t.Fatalf("want next free suffix, got %q", got)
+	}
+
+	delete(h.guests, "t1") // simulate departure
+	h.mu.Lock()
+	got = h.suffixNameLocked("room1", "Alice")
+	h.mu.Unlock()
+	if got != "Alice" {
+		t.Fatalf("a departed guest's name must be free again, got %q", got)
+	}
+
+	h.guests["t3"] = &GuestSession{guestID: "g3", roomID: "room2", name: "Alice"}
+	h.mu.Lock()
+	got = h.suffixNameLocked("room1", "Alice")
+	h.mu.Unlock()
+	if got != "Alice" {
+		t.Fatalf("collisions must be scoped to the room, got %q", got)
+	}
+}
+
+func TestJoinRoom_ValidTokenSetsCookie(t *testing.T) {
+	ts, _, _, alice, _ := newStack(t)
+	_, tok := createRoom(t, ts, alice, 1, "")
+
+	code, out, cookie := postJoin(t, ts.URL, tok, "Bob", "")
+	if code != 200 {
+		t.Fatalf("want 200 got %d (%+v)", code, out)
+	}
+	if out["roomId"] == nil || out["roomId"] == "" {
+		t.Fatalf("want roomId in response: %+v", out)
+	}
+	if cookie == "" {
+		t.Fatal("want together_guest cookie set")
+	}
+}
+
+func TestJoinRoom_BadName(t *testing.T) {
+	ts, _, _, alice, _ := newStack(t)
+	_, tok := createRoom(t, ts, alice, 1, "")
+
+	if code, out, _ := postJoin(t, ts.URL, tok, "", ""); code != 400 {
+		t.Fatalf("empty name want 400 got %d (%+v)", code, out)
+	}
+	if code, out, _ := postJoin(t, ts.URL, tok, strings.Repeat("x", 33), ""); code != 400 {
+		t.Fatalf("33-char name want 400 got %d (%+v)", code, out)
+	}
+}
+
+func TestJoinRoom_NameCollisionSuffixes(t *testing.T) {
+	ts, hub, _, alice, _ := newStack(t)
+	_, tok := createRoom(t, ts, alice, 1, "")
+
+	_, out1, c1 := postJoin(t, ts.URL, tok, "Sam", "")
+	if out1["roomId"] == nil {
+		t.Fatalf("first join failed: %+v", out1)
+	}
+	_, out2, c2 := postJoin(t, ts.URL, tok, "Sam", "")
+	if out2["roomId"] == nil {
+		t.Fatalf("second join failed: %+v", out2)
+	}
+
+	hub.mu.Lock()
+	n1, n2 := hub.guests[c1].name, hub.guests[c2].name
+	hub.mu.Unlock()
+	if n1 != "Sam" || n2 != "Sam (2)" {
+		t.Fatalf("want Sam / Sam (2), got %q / %q", n1, n2)
+	}
+}
+
+func TestJoinRoom_LiveCookieReusesIdentity(t *testing.T) {
+	ts, hub, _, alice, _ := newStack(t)
+	_, tok := createRoom(t, ts, alice, 1, "")
+
+	code1, out1, c1 := postJoin(t, ts.URL, tok, "Sam", "")
+	if code1 != 200 {
+		t.Fatalf("first join want 200 got %d", code1)
+	}
+
+	code2, out2, c2 := postJoin(t, ts.URL, tok, "Sam", "together_guest="+c1)
+	if code2 != 200 {
+		t.Fatalf("re-join want 200 got %d", code2)
+	}
+	if out1["roomId"] != out2["roomId"] {
+		t.Fatalf("roomId mismatch: %v vs %v", out1["roomId"], out2["roomId"])
+	}
+	if c2 != "" {
+		t.Fatal("re-join with a live guest cookie should not mint a new one")
+	}
+
+	hub.mu.Lock()
+	n := len(hub.guests)
+	name := hub.guests[c1].name
+	hub.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("re-join must not create a second session, got %d guests", n)
+	}
+	if name != "Sam" {
+		t.Fatalf("identity name must stay unchanged (no re-suffix), got %q", name)
+	}
+}
+
+func TestJoinRoom_RoomFull(t *testing.T) {
+	ts, _, _, alice, _ := newStack(t)
+	_, tok := createRoom(t, ts, alice, 1, "")
+
+	for i := 0; i < participantCap; i++ {
+		code, out, _ := postJoin(t, ts.URL, tok, fmt.Sprintf("Guest%d", i), "")
+		if code != 200 {
+			t.Fatalf("join %d want 200 got %d (%+v)", i, code, out)
+		}
+	}
+	code, out, _ := postJoin(t, ts.URL, tok, "Overflow", "")
+	if code != 409 {
+		t.Fatalf("13th participant want 409 got %d (%+v)", code, out)
+	}
+}
+
+func TestJoinRoom_DeadAndUnknownTokenByteIdentical(t *testing.T) {
+	ts, _, _, alice, _ := newStack(t)
+	id, tok := createRoom(t, ts, alice, 1, "")
+
+	post(t, ts.URL, "/api/rooms/"+id+"/token", alice, `{}`) // kills tok
+
+	deadBody, deadCode := joinRawBody(t, ts.URL, tok)
+	neverBody, neverCode := joinRawBody(t, ts.URL, "never-existed-token")
+
+	if deadCode != 404 || neverCode != 404 {
+		t.Fatalf("both want 404: dead=%d never=%d", deadCode, neverCode)
+	}
+	if deadBody != neverBody {
+		t.Fatalf("bodies must be byte-identical (no oracle): dead=%q never=%q", deadBody, neverBody)
+	}
+}
+
+// joinRawBody POSTs /api/rooms/join and returns the raw response body text
+// and status, for exact byte-for-byte comparisons.
+func joinRawBody(t *testing.T, ts, token string) (string, int) {
+	t.Helper()
+	b, _ := json.Marshal(map[string]string{"token": token, "name": "X"})
+	req, _ := http.NewRequest("POST", ts+"/api/rooms/join", strings.NewReader(string(b)))
+	req.Header.Set("Content-Type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	body, _ := io.ReadAll(res.Body)
+	return string(body), res.StatusCode
+}
+
+func TestPeekRoom(t *testing.T) {
+	ts, _, _, alice, _ := newStack(t)
+	_, tok := createRoom(t, ts, alice, 1, "Movie night")
+
+	code, out := doReq(t, "GET", ts.URL, "/api/rooms/join/"+tok, "")
+	if code != 200 || out["roomName"] != "Movie night" {
+		t.Fatalf("want 200 {roomName: Movie night}, got %d %+v", code, out)
+	}
+
+	code, _ = doReq(t, "GET", ts.URL, "/api/rooms/join/nope", "")
+	if code != 404 {
+		t.Fatalf("unknown token want 404 got %d", code)
+	}
+}
+
+func TestRegenerateToken_GuestCookieSurvives(t *testing.T) {
+	ts, _, _, alice, _ := newStack(t)
+	id, tok0 := createRoom(t, ts, alice, 1, "")
+
+	_, out0, guestCookie := postJoin(t, ts.URL, tok0, "Sam", "")
+	if out0["roomId"] == nil || guestCookie == "" {
+		t.Fatalf("expected a successful first join with a guest cookie: %+v", out0)
+	}
+
+	_, out := post(t, ts.URL, "/api/rooms/"+id+"/token", alice, `{}`)
+	tok1, _ := out["joinToken"].(string)
+	if tok1 == "" {
+		t.Fatalf("expected a new token: %+v", out)
+	}
+
+	if code, _, _ := postJoin(t, ts.URL, tok0, "Other", ""); code != 404 {
+		t.Fatalf("old token join want 404 got %d", code)
+	}
+	if code, _, _ := postJoin(t, ts.URL, tok1, "Other", ""); code != 200 {
+		t.Fatalf("new token join want 200 got %d", code)
+	}
+
+	// the already-joined guest's cookie is not tied to the token
+	code, out2, _ := postJoin(t, ts.URL, tok1, "Sam", "together_guest="+guestCookie)
+	if code != 200 || out2["roomId"] != id {
+		t.Fatalf("surviving guest cookie should still work, got %d %+v", code, out2)
+	}
+}
+
+func TestRoomMeta(t *testing.T) {
+	ts, _, _, alice, _ := newStack(t)
+	id, _ := createRoom(t, ts, alice, 1, "")
+
+	code, out := doReq(t, "GET", ts.URL, "/api/rooms/"+id+"/meta", alice)
+	if code != 200 {
+		t.Fatalf("want 200 got %d (%+v)", code, out)
+	}
+	media, _ := out["media"].(map[string]any)
+	if out["kind"] != "video" || media == nil || media["title"] != "The Movie" || media["sizeBytes"].(float64) != 10 {
+		t.Fatalf("meta shape wrong: %+v", out)
+	}
+	if _, ok := out["subtitles"].([]any); !ok {
+		t.Fatalf("subtitles should be an array: %+v", out)
+	}
+
+	code, _ = doReq(t, "GET", ts.URL, "/api/rooms/nope/meta", alice)
+	if code != 404 {
+		t.Fatalf("unknown room meta want 404 got %d", code)
 	}
 }

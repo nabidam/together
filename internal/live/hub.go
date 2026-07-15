@@ -20,9 +20,10 @@ import (
 // or the process (V2 — SPEC §9.2/§9.11). The db handle is retained only for
 // reading durable media rows at room creation, never for room state.
 type Hub struct {
-	db    *sql.DB
-	mu    sync.Mutex // guards rooms map
-	rooms map[string]*Room
+	db     *sql.DB
+	mu     sync.Mutex // guards rooms map and guests map
+	rooms  map[string]*Room
+	guests map[string]*GuestSession // keyed by the together_guest cookie token
 }
 
 // Room is ephemeral hub state. All mutable fields are guarded by Room.mu.
@@ -45,7 +46,9 @@ type client struct {
 	cancel func() // stops this connection; set in Handle, invoked by teardown
 }
 
-func NewHub(d *sql.DB) *Hub { return &Hub{db: d, rooms: map[string]*Room{}} }
+func NewHub(d *sql.DB) *Hub {
+	return &Hub{db: d, rooms: map[string]*Room{}, guests: map[string]*GuestSession{}}
+}
 
 // randHex returns n crypto-random bytes as hex — the same generator behind
 // internal/auth session tokens (crypto/rand). Room ids use 8 bytes (16 hex);
