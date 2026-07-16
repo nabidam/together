@@ -414,10 +414,26 @@ Sandbox note (from CLAUDE.md): smoke-test with `curl --noproxy '*'` and `TOGETHE
 
 **Human walkthrough — completion artifact is the human's recorded result.** A skipped gate is marked `GATE SKIPPED`, never deleted.
 
+> **GATE BLOCKED (2026-07-16)** — The guest S6 Join room button is rendered by the shared Button primitive without `type="submit"`; its default is `type="button"`, so an entered name never reaches `POST /api/rooms/join`. The initial empty-name probe's 400 is expected and transitions S6 to the form. Fix in Task 17a, then re-run this gate with a newly created room after the server has started.
+
 - **Journey:** re-walk F1 fully styled, plus F4: kill the host tab mid-playback → guest playback continues, guest can pause/seek/chat (AC-5.5) → host reopens from Home → HOST badge + Room menu restored. Then the AC-1.6/1.7 regenerate walk.
 - **Observations required:** theater layout (player dominates, strip auto-hides), dot tooltips, reconnect banner disabling inputs, all three dialogs (M2/M3/M4), "Link copied" confirm.
 - **Dependencies:** 16.
 - **Completion artifact:** the human's walkthrough result logged on this task.
+
+---
+
+## Task 17a — Fix guest join form submission
+
+- **Objective:** The S6 Join room control submits the entered guest name.
+- **Dependencies:** 16.
+- **Files:** `web/src/pages/JoinGuest.svelte`.
+- **Acceptance criteria:**
+  - The Join room control uses `type="submit"`; after the initial empty-name probe returns 400 and S6 shows its form, entering a valid name and activating the control sends `POST /api/rooms/join` with that name and navigates to the returned room.
+  - `npm --prefix web run build`, `go test ./...`, and `node --test web/src/lib/*.test.js` pass.
+- **Difficulty:** low.
+- **Context pack:** `web/src/pages/JoinGuest.svelte`, `web/src/components/ui/button/button.svelte`, `web/src/lib/api.js`.
+- **Do NOT:** Do not change the initial empty-name probe; it is the guest-cookie rejoin check.
 
 ---
 

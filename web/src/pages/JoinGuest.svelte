@@ -92,7 +92,7 @@
           <Input bind:value={name} autocomplete="name" maxlength="33" disabled={busy} />
         </label>
         {#if error}<p class="text-error text-[13px]" role="alert">{error}</p>{/if}
-        <Button class="h-11" disabled={busy}>{busy ? "Joining…" : "Join room"}</Button>
+        <Button class="h-11" type="submit" disabled={busy}>{busy ? "Joining…" : "Join room"}</Button>
       </form>
     {/if}
     {#if error && state !== "form"}<p class="text-error text-[13px]" role="alert">{error}</p>{/if}
