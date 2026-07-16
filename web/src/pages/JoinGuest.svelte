@@ -1,6 +1,8 @@
 <script>
   import { ApiError, get, post } from "../lib/api.js";
   import { go } from "../lib/router.svelte.js";
+  import { Button } from "../components/ui/button/index.js";
+  import { Input } from "../components/ui/input/index.js";
 
   let { token } = $props();
   let roomName = $state("");
@@ -65,7 +67,7 @@
 </script>
 
 <main class="min-h-dvh grid place-items-center p-4 bg-void">
-  <section class="card w-full max-w-sm p-8 flex flex-col gap-4">
+  <section class="w-full max-w-sm border border-border bg-card p-8 flex flex-col gap-4">
     <div>
       <span class="eyebrow">// together</span>
       {#if roomName}<h1 class="text-fg-strong text-2xl font-semibold tracking-tight mt-1">You're invited to “{roomName}”</h1>{/if}
@@ -87,10 +89,10 @@
       <form onsubmit={join} class="flex flex-col gap-4">
         <label class="flex flex-col gap-1">
           <span class="text-[13px] font-medium">Your name</span>
-          <input class="input" bind:value={name} autocomplete="name" maxlength="33" disabled={busy} />
+          <Input bind:value={name} autocomplete="name" maxlength="33" disabled={busy} />
         </label>
         {#if error}<p class="text-error text-[13px]" role="alert">{error}</p>{/if}
-        <button class="btn-primary" disabled={busy}>{busy ? "Joining…" : "Join room"}</button>
+        <Button class="h-11" disabled={busy}>{busy ? "Joining…" : "Join room"}</Button>
       </form>
     {/if}
     {#if error && state !== "form"}<p class="text-error text-[13px]" role="alert">{error}</p>{/if}

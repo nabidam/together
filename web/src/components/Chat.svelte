@@ -1,4 +1,6 @@
 <script>
+  import { Button } from "./ui/button/index.js";
+  import { Input } from "./ui/input/index.js";
   let { messages, send, disabled = false } = $props();
   let body = $state("");
   let list;
@@ -23,17 +25,17 @@
   <div class="px-4 pt-4"><h2 class="text-fg-strong font-medium">Chat</h2></div>
   <ul bind:this={list} class="flex-1 overflow-y-auto flex flex-col gap-3 p-4" aria-live="polite">
     {#each messages as message, index (`${message.name}-${message.createdAt}-${message.body}-${index}`)}
-      <li class="text-[15px]">
-        <span class="font-mono text-[11px] text-fg/60">{fmt(message.createdAt)}</span>
+      <li>
+        <span class="font-mono text-xs text-fg/60">{fmt(message.createdAt)}</span>
         <span class="text-secondary font-medium ml-1">{message.name}</span>
         <span class="text-fg-strong ml-1 break-words">{message.body}</span>
       </li>
     {:else}
-      <li class="text-fg text-[15px]">No messages yet.</li>
+      <li class="text-fg">No messages yet.</li>
     {/each}
   </ul>
   <form onsubmit={submit} class="p-3 border-t border-border flex gap-2">
-    <input class="input" placeholder="Say something…" bind:value={body} maxlength="2000" disabled={disabled} aria-label="Chat message" />
-    <button class="btn-primary shrink-0" disabled={disabled}>Send</button>
+    <Input placeholder="Say something…" bind:value={body} maxlength="2000" disabled={disabled} aria-label="Chat message" />
+    <Button class="h-11 shrink-0" disabled={disabled}>Send</Button>
   </form>
 </div>

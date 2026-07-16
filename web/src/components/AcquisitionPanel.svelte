@@ -50,10 +50,10 @@
     </div>
     <input bind:this={picker} class="sr-only" type="file" onchange={selectFile} aria-label="Choose a local media file" />
 
-    <p class="text-fg text-[13px]">After downloading, load the saved file here.</p>
+    <p class="text-fg text-sm">After downloading, load the saved file here.</p>
 
     {#if mismatch}
-      <div class="w-full border border-warning/60 bg-warning/10 rounded-sm p-4 text-left" role="alert">
+      <div class="w-full border border-warning/60 bg-warning/10 p-4 text-left" role="alert">
         <div class="flex gap-2 text-warning"><TriangleAlert size={18} aria-hidden="true" /><strong>That file doesn't match.</strong></div>
         <p class="text-fg mt-3">Selected: {mismatch.name} · {formatBytes(mismatch.selectedSize)}</p>
         <p class="text-fg">Expected: {formatBytes(mismatch.expectedSize)}</p>

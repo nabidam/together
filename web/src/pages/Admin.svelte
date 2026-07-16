@@ -49,7 +49,7 @@
     </div>
   </header>
 
-  <section class="card p-6 flex flex-col gap-4">
+  <section class="border border-border bg-card p-6 flex flex-col gap-4">
     <span class="eyebrow">// upload media</span>
     <form onsubmit={submit} class="flex flex-col gap-3">
       <div class="flex gap-2">
@@ -74,7 +74,7 @@
     </form>
   </section>
 
-  <section class="card p-6 flex flex-col gap-3">
+  <section class="border border-border bg-card p-6 flex flex-col gap-3">
     <div class="flex items-center justify-between">
       <span class="eyebrow">// library</span>
       <Button variant="ghost" size="icon-lg" onclick={load} aria-label="Refresh"><RefreshCw /></Button>
@@ -103,7 +103,7 @@
     </Table>
   </section>
 
-  <section class="card p-6 flex flex-col gap-3">
+  <section class="border border-border bg-card p-6 flex flex-col gap-3">
     <span class="eyebrow">// invites</span>
     <Button variant="outline" class="h-11 self-start" onclick={() => post("/api/admin/invites").then(load)}><TicketPlus /> New invite code</Button>
     <ul class="flex flex-col gap-1">

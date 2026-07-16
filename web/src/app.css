@@ -82,23 +82,7 @@ body {
   @apply bg-surface text-fg font-sans text-[15px] leading-normal antialiased;
 }
 
-/* NxCode primitives */
-.card { @apply bg-card border border-border rounded-md; }
 .eyebrow { @apply font-mono text-[11px] font-medium uppercase tracking-[0.12em] text-fg; }
-.btn-primary {
-  @apply bg-primary text-on-primary font-medium rounded-md px-4 h-11 inline-flex items-center justify-center gap-2
-         cursor-pointer transition-[opacity,box-shadow] duration-200 hover:opacity-90
-         focus-visible:outline-2 focus-visible:outline-secondary focus-visible:outline-offset-2;
-}
-.btn-ghost {
-  @apply border border-border text-fg-strong rounded-md px-4 h-11 inline-flex items-center justify-center gap-2
-         cursor-pointer transition-colors duration-200 hover:bg-card
-         focus-visible:outline-2 focus-visible:outline-secondary focus-visible:outline-offset-2;
-}
-.input {
-  @apply bg-input border border-border rounded-md h-11 px-3 w-full text-fg-strong
-         placeholder:text-fg/50 focus:outline-2 focus:outline-secondary focus:outline-offset-0;
-}
 .glow-green { box-shadow: 0 0 0 1px var(--color-primary), 0 0 12px 0 color-mix(in srgb, var(--color-primary) 35%, transparent); }
 
 @media (prefers-reduced-motion: reduce) {
