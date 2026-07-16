@@ -389,6 +389,8 @@ Sandbox note (from CLAUDE.md): smoke-test with `curl --noproxy '*'` and `TOGETHE
 
 ## Task 16 — Side panel + transport bar + retire V1 CSS primitives
 
+> **DONE** `3232d09` — Verified: `npm run build` green; `go test ./...` and `node --test web/src/lib/*.test.js` green; `gofmt -l internal cmd` empty; `grep -rn 'btn-primary\|btn-ghost\|\.input\|\.card' web/src` empty; temporary `TOGETHER_ADDR=:18080` server returned `ok` from `/healthz`. The Room transport sends only intents and is disabled while disconnected; the persisted side panel defaults open for audio rooms.
+
 - **Objective:** The theater layout completes: collapsible side panel (participants + chat), echo-driven transport bar, V1 primitives deleted. (PLAN chunk 7, layout half.)
 - **Inputs:** Task 15's strip; task 11's Participants; task 9's Chat.
 - **Outputs:** `SidePanel.svelte`; restyled Participants/Chat/AcquisitionPanel; transport bar in Room; `app.css` cleanup.
