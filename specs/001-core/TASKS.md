@@ -441,6 +441,8 @@ Sandbox note (from CLAUDE.md): smoke-test with `curl --noproxy '*'` and `TOGETHE
 
 ## Task 17b — Fix room transport Slider value shape
 
+> **DONE** `2ec59a8` — Verified: `npm --prefix web run build`, `go test ./...`, and `node --test web/src/lib/*.test.js` pass; the one-thumb Slider receives `[scrubPosition]` and committed scrubs send `value[0]` as the scalar seek position.
+
 - **Objective:** Render the room transport without crashing once room metadata and WebSocket hello arrive.
 - **Dependencies:** 17a.
 - **Files:** `web/src/pages/Room.svelte`.
