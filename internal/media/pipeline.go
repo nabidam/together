@@ -58,10 +58,12 @@ func Probe(path string) (Info, error) {
 }
 
 // Plan returns ffmpeg output args, or nil to copy the file unchanged.
-func Plan(kind string, i Info) []string {
-	if kind == "music" {
-		// ponytail: exotic music formats (wma…) will fail in browser; transcode-once rule extends here if it ever happens
-		return nil
+func Plan(i Info) []string {
+	if i.VCodec == "" {
+		if i.ACodec == "aac" || i.ACodec == "mp3" || strings.Contains(i.Container, "m4a") {
+			return nil
+		}
+		return []string{"-vn", "-c:a", "aac", "-movflags", "+faststart"}
 	}
 	goodAudio := i.ACodec == "aac" || i.ACodec == "mp3"
 	switch {
@@ -118,27 +120,39 @@ func run(name string, args ...string) error {
 }
 
 func process(d *sql.DB, dataDir string, mediaID int64) error {
-	var kind string
 	var origName sql.NullString
-	if err := d.QueryRow(`SELECT kind, orig_name FROM media WHERE id=?`, mediaID).Scan(&kind, &origName); err != nil {
+	if err := d.QueryRow(`SELECT orig_name FROM media WHERE id=?`, mediaID).Scan(&origName); err != nil {
 		return err
 	}
 	src := UploadPath(dataDir, mediaID)
-	ext := ".mp4"
-	if kind == "music" {
-		// ponytail: upload endpoint guarantees music orig_name has an extension; .mp4 fallback only reachable for movies
-		if e := filepath.Ext(origName.String); e != "" {
-			ext = e
-		}
-	}
-	dst := filepath.Join(dataDir, "media", strconv.FormatInt(mediaID, 10)+ext)
+	var dst string
 
 	if _, statErr := os.Stat(src); statErr == nil {
 		info, err := Probe(src)
 		if err != nil {
 			return err
 		}
-		if args := Plan(kind, info); args == nil {
+		kind := "video"
+		if info.VCodec == "" {
+			kind = "audio"
+		}
+		if _, err := d.Exec(`UPDATE media SET kind=? WHERE id=?`, kind, mediaID); err != nil {
+			return err
+		}
+		args := Plan(info)
+		ext := ".mp4"
+		if kind == "audio" {
+			ext = ".m4a"
+			if args == nil {
+				if originalExt := filepath.Ext(origName.String); originalExt != "" {
+					ext = originalExt
+				} else if info.ACodec == "mp3" {
+					ext = ".mp3"
+				}
+			}
+		}
+		dst = filepath.Join(dataDir, "media", strconv.FormatInt(mediaID, 10)+ext)
+		if args == nil {
 			if err := os.Rename(src, dst); err != nil {
 				return err
 			}
@@ -149,8 +163,12 @@ func process(d *sql.DB, dataDir string, mediaID int64) error {
 			}
 			os.Remove(src)
 		}
-	} else if _, dstErr := os.Stat(dst); dstErr != nil {
-		return statErr // src gone and no output — upload truly missing
+	} else {
+		var err error
+		dst, err = existingOutput(dataDir, mediaID)
+		if err != nil {
+			return statErr // src gone and no output — upload truly missing
+		}
 	}
 	// src missing but dst present = crash after the move, before the status flip; finish from dst
 
@@ -179,7 +197,25 @@ func process(d *sql.DB, dataDir string, mediaID int64) error {
 	if err != nil {
 		return err
 	}
-	_, err = d.Exec(`UPDATE media SET status='ready', file_path=?, size_bytes=?, duration=? WHERE id=?`,
-		dst, fi.Size(), info.Duration, mediaID)
+	kind := "video"
+	if info.VCodec == "" {
+		kind = "audio"
+	}
+	_, err = d.Exec(`UPDATE media SET kind=?, status='ready', file_path=?, size_bytes=?, duration=? WHERE id=?`,
+		kind, dst, fi.Size(), info.Duration, mediaID)
 	return err
+}
+
+func existingOutput(dataDir string, mediaID int64) (string, error) {
+	pattern := filepath.Join(dataDir, "media", strconv.FormatInt(mediaID, 10)+".*")
+	paths, err := filepath.Glob(pattern)
+	if err != nil {
+		return "", err
+	}
+	for _, path := range paths {
+		if !strings.Contains(filepath.Base(path), ".sub.") {
+			return path, nil
+		}
+	}
+	return "", os.ErrNotExist
 }

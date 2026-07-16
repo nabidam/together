@@ -44,7 +44,7 @@ func patch(t *testing.T, c *http.Client, url string, body []byte) *http.Response
 func TestChunkedUploadWithResume(t *testing.T) {
 	c, ts, dir := adminClient(t)
 	r, _ := c.Post(ts.URL+"/api/admin/media", "application/json",
-		strings.NewReader(`{"kind":"movie","title":"Test","origName":"t.mp4"}`))
+		strings.NewReader(`{"title":"Test","origName":"t.mp4"}`))
 	var m struct{ ID int64 }
 	json.NewDecoder(r.Body).Decode(&m)
 
@@ -90,21 +90,12 @@ func TestChunkedUploadWithResume(t *testing.T) {
 	}
 }
 
-func TestMusicRequiresExtension(t *testing.T) {
-	c, ts, _ := adminClient(t)
-
-	// music without extension should fail
+func TestCreateMedia_IgnoresClientKind(t *testing.T) {
+	c, ts, dir := adminClient(t)
 	r, _ := c.Post(ts.URL+"/api/admin/media", "application/json",
-		strings.NewReader(`{"kind":"music","title":"X","origName":"noext"}`))
-	if r.StatusCode != 400 {
-		t.Fatalf("music without ext: want 400 got %d", r.StatusCode)
-	}
-
-	// music with extension should succeed
-	r, _ = c.Post(ts.URL+"/api/admin/media", "application/json",
-		strings.NewReader(`{"kind":"music","title":"X","origName":"song.flac"}`))
+		strings.NewReader(`{"kind":"audio","title":"X","origName":"song.opus"}`))
 	if r.StatusCode != 200 {
-		t.Fatalf("music with ext: want 200 got %d", r.StatusCode)
+		t.Fatalf("create: want 200 got %d", r.StatusCode)
 	}
 	var m struct{ ID int64 }
 	if err := json.NewDecoder(r.Body).Decode(&m); err != nil {
@@ -112,5 +103,26 @@ func TestMusicRequiresExtension(t *testing.T) {
 	}
 	if m.ID == 0 {
 		t.Fatalf("want nonzero ID")
+	}
+	d, err := db.Open(filepath.Join(dir, "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	var kind string
+	if err := d.QueryRow(`SELECT kind FROM media WHERE id=?`, m.ID).Scan(&kind); err != nil {
+		t.Fatal(err)
+	}
+	if kind != "video" {
+		t.Fatalf("client kind selected stored kind: got %q, want provisional video", kind)
+	}
+}
+
+func TestCreateMedia_TitleRequired(t *testing.T) {
+	c, ts, _ := adminClient(t)
+	r, _ := c.Post(ts.URL+"/api/admin/media", "application/json",
+		strings.NewReader(`{"origName":"song.mp3"}`))
+	if r.StatusCode != http.StatusBadRequest {
+		t.Fatalf("empty title: want 400 got %d", r.StatusCode)
 	}
 }

@@ -31,17 +31,16 @@ func UploadRoutes(mux *http.ServeMux, d *sql.DB, dataDir string) {
 	adm := func(h http.HandlerFunc) http.HandlerFunc { return auth.Require(d, true, h) }
 
 	mux.HandleFunc("POST /api/admin/media", adm(func(w http.ResponseWriter, r *http.Request) {
-		var in struct{ Kind, Title, OrigName string }
+		var in struct{ Title, OrigName string }
 		json.NewDecoder(r.Body).Decode(&in)
-		if (in.Kind != "movie" && in.Kind != "music") || in.Title == "" {
-			http.Error(w, "kind must be movie|music, title required", 400)
+		if in.Title == "" {
+			http.Error(w, "title required", 400)
 			return
 		}
-		if in.Kind == "music" && filepath.Ext(in.OrigName) == "" {
-			http.Error(w, "music uploads need a filename with extension", 400)
-			return
-		}
-		res, err := d.Exec(`INSERT INTO media (kind, title, orig_name) VALUES (?,?,?)`, in.Kind, in.Title, in.OrigName)
+		// kind is provisional until the worker probes the uploaded bytes; the
+		// schema requires a value before those bytes exist. Client-supplied kind
+		// fields are deliberately ignored and can never select the pipeline path.
+		res, err := d.Exec(`INSERT INTO media (kind, title, orig_name) VALUES ('video',?,?)`, in.Title, in.OrigName)
 		if err != nil {
 			http.Error(w, "server error", 500)
 			return
