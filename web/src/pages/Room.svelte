@@ -176,7 +176,7 @@
             <Button variant="ghost" size="icon-lg" disabled={disconnected || !activity} onclick={() => intent(activity?.state.paused ? "play" : "pause")} aria-label={activity?.state.paused ? "Play" : "Pause"}>
               {#if activity?.state.paused}<Play />{:else}<Pause />{/if}
             </Button>
-            <Slider value={scrubPosition} min={0} max={media.duration ?? 0} step={0.1} disabled={disconnected || !activity} onValueCommit={(value) => intent("seek", value)} aria-label="Seek playback" />
+            <Slider value={[scrubPosition]} min={0} max={media.duration ?? 0} step={0.1} disabled={disconnected || !activity} onValueCommit={(value) => intent("seek", value[0])} aria-label="Seek playback" />
             <span class="hidden sm:inline whitespace-nowrap font-mono text-sm text-fg-strong">{timecode(scrubPosition)} <span class="text-fg/50">/ {timecode(media.duration)}</span></span>
             <Button variant="ghost" size="icon-lg" disabled={disconnected || !activity} onclick={toggleCaptions} aria-label="Toggle captions"><Captions /></Button>
             <Button variant="ghost" size="icon-lg" onclick={toggleFullscreen} aria-label="Fullscreen"><Maximize /></Button>

@@ -439,6 +439,21 @@ Sandbox note (from CLAUDE.md): smoke-test with `curl --noproxy '*'` and `TOGETHE
 
 ---
 
+## Task 17b — Fix room transport Slider value shape
+
+- **Objective:** Render the room transport without crashing once room metadata and WebSocket hello arrive.
+- **Dependencies:** 17a.
+- **Files:** `web/src/pages/Room.svelte`.
+- **Acceptance criteria:**
+  - The shadcn Slider receives its single-thumb value as an array and no longer throws `value.current.map is not a function`.
+  - Committing a scrub sends the scalar position to the existing seek intent contract.
+  - `npm --prefix web run build`, `go test ./...`, and `node --test web/src/lib/*.test.js` pass.
+- **Difficulty:** low.
+- **Context pack:** `web/src/pages/Room.svelte`, `web/src/components/ui/slider/slider.svelte`, `ARCHITECTURE.md` §4.5 and §6.
+- **Do NOT:** Do not change the echo-driven intent contract or playback synchronization.
+
+---
+
 ## Task 18 — Audio pipeline branch
 
 - **Objective:** Ingest handles pure-audio files without ever touching libx264; `kind` comes from the probe, not the client. (PLAN chunk 8, backend half.)
