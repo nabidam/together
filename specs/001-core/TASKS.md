@@ -307,6 +307,8 @@ Sandbox note (from CLAUDE.md): smoke-test with `curl --noproxy '*'` and `TOGETHE
 
 **Human walkthrough — completion artifact is the human's recorded result. Milestone A ends here.** A skipped gate is marked `GATE SKIPPED`, never deleted.
 
+> **GATE SKIPPED (2026-07-16)** — Blocked before the guest-join step: room creation returns `joinToken`, but the current host UI discards it and exposes no visible copy-invite-link control. The token endpoint can be invoked manually from DevTools, but that is not a valid human UI walkthrough. Re-run this gate after the host-facing invite-link control exists.
+
 - **Journey:** two browsers (normal + incognito), real uploaded video, walking UX F1 steps 1–11 verbatim: host signs in → creates room → copies link → guest joins named "Ali" → downloads media → loads file → size check → File Ready dot on both screens → host plays → sync within bands → guest scrubs → both jump → guest connection killed and restored mid-scene via the invite link (same name, mid-scene position) → chat → host ends room → both see Room Closed; library + accounts intact.
 - **Observations required:** every step, plus the three dot states changing on the *other* browser's participant list. Ugly V1 styling acceptable; **any faked step fails the gate.**
 - **Dependencies:** 11.
