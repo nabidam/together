@@ -3,6 +3,9 @@
   import { go } from "../lib/router.svelte.js";
   import { uploadMedia } from "../lib/upload.js";
   import { ArrowLeft, Trash2, TicketPlus, RefreshCw } from "lucide-svelte";
+  import { Button } from "../components/ui/button/index.js";
+  import { Input } from "../components/ui/input/index.js";
+  import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table/index.js";
 
   let { me } = $props();
 
@@ -39,7 +42,7 @@
 
 <main class="min-h-dvh max-w-3xl mx-auto p-6 flex flex-col gap-6">
   <header class="flex items-center gap-3">
-    <button class="btn-ghost !h-11 !px-2" onclick={() => go("/")} aria-label="Back"><ArrowLeft size={16} /></button>
+    <Button variant="ghost" size="icon-lg" onclick={() => go("/")} aria-label="Back"><ArrowLeft /></Button>
     <div>
       <span class="eyebrow">// admin</span>
       <h1 class="text-fg-strong text-2xl font-semibold tracking-tight">Platform</h1>
@@ -50,64 +53,62 @@
     <span class="eyebrow">// upload media</span>
     <form onsubmit={submit} class="flex flex-col gap-3">
       <div class="flex gap-2">
-        <select class="input !w-32" bind:value={kind} aria-label="Media kind">
+        <select class="h-11 w-32 rounded-md border border-border bg-input px-3 text-fg-strong focus-visible:outline-2 focus-visible:outline-secondary focus-visible:outline-offset-2" bind:value={kind} aria-label="Media kind">
           <option value="movie">movie</option>
           <option value="music">music</option>
         </select>
-        <input class="input" placeholder="Title" bind:value={title} required />
+        <Input class="h-11" placeholder="Title" bind:value={title} required />
       </div>
-      <label class="text-[13px] font-medium flex flex-col gap-1">Media file (.mp4 / .mkv / audio)
-        <input class="input !h-auto py-2" type="file" required onchange={(e) => (file = e.target.files[0])} />
+      <label class="flex flex-col gap-1 text-sm font-medium">Media file (.mp4 / .mkv / audio)
+        <Input class="h-auto py-2" type="file" required onchange={(e) => (file = e.target.files[0])} />
       </label>
-      <label class="text-[13px] font-medium flex flex-col gap-1">Subtitle (.srt, optional)
-        <input class="input !h-auto py-2" type="file" accept=".srt,.vtt,.ass" onchange={(e) => (subtitle = e.target.files[0])} />
+      <label class="flex flex-col gap-1 text-sm font-medium">Subtitle (.srt, optional)
+        <Input class="h-auto py-2" type="file" accept=".srt,.vtt,.ass" onchange={(e) => (subtitle = e.target.files[0])} />
       </label>
       {#if progress !== null}
-        <p class="font-mono text-[13px] text-primary">[{bar(progress)}] {Math.round(progress * 100)}% uploading…</p>
+        <p class="font-mono text-sm text-primary">[{bar(progress)}] {Math.round(progress * 100)}% uploading…</p>
       {:else}
-        <button class="btn-primary self-start">Upload</button>
+        <Button class="h-11 self-start">Upload</Button>
       {/if}
-      {#if error}<p class="text-error text-[13px]" role="alert">{error}</p>{/if}
+      {#if error}<p class="text-sm text-error" role="alert">{error}</p>{/if}
     </form>
   </section>
 
   <section class="card p-6 flex flex-col gap-3">
     <div class="flex items-center justify-between">
       <span class="eyebrow">// library</span>
-      <button class="btn-ghost !h-11 !px-2" onclick={load} aria-label="Refresh"><RefreshCw size={14} /></button>
+      <Button variant="ghost" size="icon-lg" onclick={load} aria-label="Refresh"><RefreshCw /></Button>
     </div>
-    <ul class="flex flex-col gap-2">
+    <Table>
+      <TableHeader><TableRow><TableHead>Title</TableHead><TableHead>Kind</TableHead><TableHead>Status</TableHead><TableHead>Size</TableHead><TableHead><span class="sr-only">Actions</span></TableHead></TableRow></TableHeader>
+      <TableBody>
       {#each media as m (m.id)}
-        <li class="flex items-center gap-3 border-b border-border pb-2 last:border-0">
-          <span class="font-mono text-[11px] text-fg/60 w-8">#{m.id}</span>
-          <span class="text-fg-strong flex-1 min-w-0 truncate">{m.title}</span>
-          <span class="font-mono text-[11px]"
-                class:text-primary={m.status === "ready"}
-                class:text-warning={m.status === "processing" || m.status === "uploading"}
-                class:text-error={m.status === "failed"}>● {m.status}</span>
-          {#if m.sizeBytes}<span class="font-mono text-[11px] text-fg/60">{fmtGB(m.sizeBytes)}</span>{/if}
-          <button class="btn-ghost !h-11 !w-11 !px-0" aria-label="Delete {m.title}"
+        <TableRow>
+          <TableCell class="text-fg-strong"><span class="mr-2 font-mono text-xs text-fg/60">#{m.id}</span>{m.title}</TableCell>
+          <TableCell class="font-mono text-xs">{m.kind}</TableCell>
+          <TableCell class={`font-mono text-xs ${m.status === "ready" ? "text-primary" : m.status === "failed" ? "text-error" : "text-warning"}`}>● {m.status}</TableCell>
+          <TableCell class="font-mono text-xs text-fg/60">{#if m.sizeBytes}{fmtGB(m.sizeBytes)}{/if}</TableCell>
+          <TableCell><Button variant="ghost" size="icon-lg" aria-label="Delete {m.title}"
                   onclick={() => confirm(`Delete "${m.title}"?`) && del(`/api/admin/media/${m.id}`).then(load)}>
-            <Trash2 size={14} class="text-error" />
-          </button>
-        </li>
+            <Trash2 class="text-error" />
+          </Button></TableCell>
+        </TableRow>
         {#if m.status === "failed" && m.error}
-          <li class="font-mono text-[11px] text-error whitespace-pre-wrap pl-11">{m.error}</li>
+          <TableRow><TableCell colspan="5" class="whitespace-pre-wrap font-mono text-xs text-error">{m.error}</TableCell></TableRow>
         {/if}
       {:else}
-        <li class="text-fg text-[13px]">Library is empty.</li>
+        <TableRow><TableCell colspan="5">Library is empty.</TableCell></TableRow>
       {/each}
-    </ul>
+      </TableBody>
+    </Table>
   </section>
 
   <section class="card p-6 flex flex-col gap-3">
     <span class="eyebrow">// invites</span>
-    <button class="btn-ghost self-start" onclick={() => post("/api/admin/invites").then(load)}>
-      <TicketPlus size={16} /> New invite code
-    </button>
+    <Button variant="outline" class="h-11 self-start" onclick={() => post("/api/admin/invites").then(load)}><TicketPlus /> New invite code</Button>
     <ul class="flex flex-col gap-1">
       {#each invites as i (i.code)}
-        <li class="font-mono text-[13px]" class:opacity-40={i.used}>{i.code} {i.used ? "· used" : ""}</li>
+        <li class="font-mono text-sm" class:opacity-40={i.used}>{i.code} {i.used ? "· used" : ""}</li>
       {/each}
     </ul>
   </section>

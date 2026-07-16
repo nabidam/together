@@ -2,6 +2,7 @@
   import { route, go } from "./lib/router.svelte.js";
   import { get } from "./lib/api.js";
   import Login from "./pages/Login.svelte";
+  import Register from "./pages/Register.svelte";
   import Home from "./pages/Home.svelte";
   import JoinGuest from "./pages/JoinGuest.svelte";
   import Room from "./pages/Room.svelte";
@@ -30,7 +31,11 @@
 {:else if roomMatch}
   <Room {me} roomId={roomMatch[1]} />
 {:else if !me}
-  <Login onlogin={(u) => (me = u)} />
+  {#if route.path === "/register"}
+    <Register onregister={(u) => (me = u)} />
+  {:else}
+    <Login onlogin={(u) => (me = u)} />
+  {/if}
 {:else if route.path === "/admin" && me.role === "admin"}
   <Admin {me} />
 {:else}
