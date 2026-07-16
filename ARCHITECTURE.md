@@ -23,7 +23,7 @@ internal/live/       THE room world (all in-memory):
                      watch.go   pure sync state machine (WatchState, Apply, PositionAt)
                      hub.go     rooms map, per-room mutex + recover, WS handling,
                                 broadcast, chat ring, presence/status, empty-timer
-                     rooms.go   room lifecycle: create/list/end/regenerate,
+                     rooms.go   room lifecycle: create/list/read-token/end/regenerate,
                                 guest sessions + join, RequireRoom middleware
 internal/media/      upload.go   resumable chunked admin upload
                      pipeline.go ffprobe/ffmpeg ingest worker (+ audio branch),
@@ -304,7 +304,7 @@ Compile-time constants (not config): room cap 12, chat ring 200, chat max 2000 c
 |---|---|
 | 1. Host signs in → S3 | `POST /api/login`, `GET /api/me`, `GET /api/rooms`, `GET /api/media` (M1 list) |
 | 2. Create room, pick media | `POST /api/rooms {mediaId,name?}` → `{id,joinToken}`; auto-started activity |
-| 3. Copy invite link | client-side from `joinToken` (`#/join/{token}`); regenerate = `POST /api/rooms/{id}/token` |
+| 3. Copy invite link | create response or returning-host `GET /api/rooms/{id}/token` supplies `joinToken` (`#/join/{token}`); regenerate = `POST /api/rooms/{id}/token` |
 | 4. Guest opens link, names self, joins | `GET /api/rooms/join/{token}` (S6 room name) → `POST /api/rooms/join {token,name}` → guest cookie → `GET /ws/{roomId}` → `hello` |
 | 5. Download media, size check, File Ready | `GET /api/rooms/{id}/meta` (sizeBytes) → `GET /media/{id}/download` (room auth) → local pick → WS `status:file_ready` → `presence` broadcast |
 | 6. Arm on gesture | client-only (arm overlay) → WS `status:in_sync` |

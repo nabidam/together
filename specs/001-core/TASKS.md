@@ -380,7 +380,7 @@ Sandbox note (from CLAUDE.md): smoke-test with `curl --noproxy '*'` and `TOGETHE
   - M4 flow with UX §M4 copy → confirm switches the player to `/media/{id}/stream` (AC-2.7); never automatic.
 - **Difficulty:** medium.
 - **Interfaces:**
-  - CONSUMES: `POST /api/rooms/{id}/token` → `{joinToken}`; `DELETE /api/rooms/{id}`; `hello.you.isHost` for menu visibility; task 13's Dialog/DropdownMenu; task 10's stream-switch hook in AcquisitionPanel.
+  - CONSUMES: `GET /api/rooms/{id}/token` → `{joinToken}` for a returning host; `POST /api/rooms/{id}/token` → `{joinToken}`; `DELETE /api/rooms/{id}`; `hello.you.isHost` for menu visibility; task 13's Dialog/DropdownMenu; task 10's stream-switch hook in AcquisitionPanel.
   - PRODUCES: `RoomStrip` slot in Room layout that task 16's panel toggle coexists with; joinToken must be available client-side to the host (from `POST /api/rooms` create response or room meta — verify with real code; if absent for a re-entering host, route through docs before improvising).
 - **Context pack (hints):** `web/src/pages/Room.svelte`, `web/src/components/AcquisitionPanel.svelte`, `web/src/components/ui/*`, `web/src/lib/api.js`. ARCHITECTURE §4.3, §6. UX screens **S4 §1 (strip), M2, M3, M4**; UX §5 (host controls buried one disclosure deep — must not sit next to play/pause); **DESIGN.md**.
 - **Do NOT:** no kick/co-host affordances (backlog); no audio UI.
