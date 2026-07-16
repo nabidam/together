@@ -425,6 +425,8 @@ Sandbox note (from CLAUDE.md): smoke-test with `curl --noproxy '*'` and `TOGETHE
 
 ## Task 17a — Fix guest join form submission
 
+> **DONE** `c3a3409` — Verified: `npm --prefix web run build`, `go test ./...`, and `node --test web/src/lib/*.test.js` pass; the S6 control now submits its valid entered name to `POST /api/rooms/join` after the expected empty-name rejoin probe returns 400.
+
 - **Objective:** The S6 Join room control submits the entered guest name.
 - **Dependencies:** 16.
 - **Files:** `web/src/pages/JoinGuest.svelte`.
