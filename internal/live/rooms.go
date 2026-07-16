@@ -69,6 +69,9 @@ func (h *Hub) roomsGetDispatch(w http.ResponseWriter, r *http.Request) {
 	case strings.HasSuffix(tail, "/meta"):
 		r.SetPathValue("id", strings.TrimSuffix(tail, "/meta"))
 		h.RequireRoom(h.roomMeta)(w, r)
+	case strings.HasSuffix(tail, "/token"):
+		r.SetPathValue("id", strings.TrimSuffix(tail, "/token"))
+		auth.Require(h.db, false, h.roomToken)(w, r)
 	default:
 		writeErr(w, 404, "not found")
 	}
@@ -440,6 +443,25 @@ func (h *Hub) regenToken(w http.ResponseWriter, r *http.Request) {
 	}
 	rm.mu.Lock()
 	rm.joinToken = randHex(16)
+	tok := rm.joinToken
+	rm.mu.Unlock()
+	writeJSON(w, 200, map[string]any{"joinToken": tok})
+}
+
+// roomToken returns the current invite token only to a room host. Metadata is
+// intentionally available to any room participant, so exposing the token from
+// roomMeta would leak the invite to guests and non-host account users.
+func (h *Hub) roomToken(w http.ResponseWriter, r *http.Request) {
+	rm, ok := h.getRoom(r.PathValue("id"))
+	if !ok {
+		writeErr(w, 404, "room not found")
+		return
+	}
+	if !h.isHost(rm, auth.From(r)) {
+		writeErr(w, 403, "only the host can view the link")
+		return
+	}
+	rm.mu.Lock()
 	tok := rm.joinToken
 	rm.mu.Unlock()
 	writeJSON(w, 200, map[string]any{"joinToken": tok})

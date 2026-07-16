@@ -171,6 +171,7 @@ Pipeline decision tree at `finish` (one worker, `nice -n 19`): probe → **no vi
 | GET `/api/rooms` | → `[{id,name,mediaId,mediaTitle,kind,participants}]` (live rooms from hub) | 200 | acct |
 | POST `/api/rooms` | `{mediaId, name?}` → `{id, joinToken}`; name defaults to media title; media must be `ready`; creates room **and** starts its watch activity | 201, 400, 404 media | acct |
 | DELETE `/api/rooms/{id}` | → `{}` — immediate teardown, broadcasts `room_closed` | 200, 403 not host, 404 | acct (host check inside) |
+| GET `/api/rooms/{id}/token` | → `{joinToken}` — retrieves the current invite for a returning host | 200, 403 not host, 404 | acct (host) |
 | POST `/api/rooms/{id}/token` | `{}` → `{joinToken}` — regenerate; old token dead for new joins, connected guests persist | 200, 403, 404 | acct (host) |
 | POST `/api/rooms/join` | `{token, name}` → `{roomId}` + guest cookie (`together_guest`, HttpOnly, session-scoped). Re-join with a live guest cookie for that room skips name minting and returns the same identity. | 200; 404 dead/unknown token (same body as unknown room — no oracle); 400 bad name; 409 room full | **none — public (with the peek route below, the only unauthenticated surface besides login/register)** |
 | GET `/api/rooms/{id}/meta` | → `{name, kind, media:{id,title,sizeBytes,duration}, subtitles:[{id,label}]}` — serves the acquisition panel's size check (FR-11); S6's pre-join room name comes from the peek route below | 200, 404 | room |

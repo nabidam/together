@@ -1,7 +1,6 @@
 <script>
   import { untrack } from "svelte";
   import { get } from "../lib/api.js";
-  import { go } from "../lib/router.svelte.js";
   import { connect } from "../lib/ws.js";
   import { revokeObjectURL } from "../lib/localfile.js";
   import AcquisitionPanel from "../components/AcquisitionPanel.svelte";
@@ -9,7 +8,8 @@
   import Participants from "../components/Participants.svelte";
   import Player from "../components/Player.svelte";
   import RoomClosed from "../components/RoomClosed.svelte";
-  import { ArrowLeft, LoaderCircle } from "lucide-svelte";
+  import RoomStrip from "../components/RoomStrip.svelte";
+  import { LoaderCircle } from "lucide-svelte";
 
   let { me = null, roomId } = $props();
   let messages = $state([]);
@@ -22,6 +22,8 @@
   let loadError = $state("");
   let sock = $state(null);
   let playbackSource = $state("");
+  let isHost = $state(false);
+  let joinToken = $state("");
 
   $effect(() => {
     let active = true;
@@ -32,6 +34,8 @@
     media = null;
     revokeObjectURL(untrack(() => playbackSource));
     playbackSource = "";
+    isHost = false;
+    joinToken = "";
     closed = false;
     loadError = "";
     connection = "connecting";
@@ -49,6 +53,7 @@
       if (!active) return;
       if (message.type === "hello") {
         room = message.room;
+        isHost = message.you.isHost;
         users = message.users;
         activity = message.activity;
         messages = message.chat;
@@ -73,6 +78,19 @@
     };
   });
 
+  $effect(() => {
+    if (!isHost || !roomId) return;
+    let active = true;
+    get(`/api/rooms/${roomId}/token`)
+      .then(({ joinToken: token }) => {
+        if (active) joinToken = token;
+      })
+      .catch(() => {
+        if (active) joinToken = "";
+      });
+    return () => { active = false; };
+  });
+
   function setPlaybackSource(source) {
     revokeObjectURL(playbackSource);
     playbackSource = source;
@@ -80,6 +98,7 @@
 
   const ready = $derived(room !== null && media !== null);
   const disconnected = $derived(connection !== "connected");
+  const playbackActive = $derived(Boolean(playbackSource && activity));
 
   // Re-announce the local edge after each socket connection. The Player will
   // advance file_ready to in_sync once its drift loop is running again.
@@ -94,18 +113,11 @@
   <RoomClosed accountUser={Boolean(me)} />
 {:else}
   <main class="h-dvh flex flex-col">
-    <header class="min-h-14 border-b border-border flex items-center gap-3 px-4 shrink-0">
-      {#if me}
-        <button class="btn-ghost !h-11 !px-2" onclick={() => go("/")} aria-label="Back to rooms"><ArrowLeft size={16} /></button>
-      {/if}
-      <div class="min-w-0">
-        <span class="eyebrow">// room</span>
-        <h1 class="text-fg-strong font-medium truncate">{room?.name ?? "Connecting to room…"}{media ? ` · ${media.title}` : ""}</h1>
-      </div>
-      {#if connection === "reconnecting"}
-        <div class="ml-auto text-warning text-[13px]" role="status">Reconnecting…</div>
-      {/if}
-    </header>
+    <RoomStrip {me} {room} {media} {roomId} {joinToken} {isHost} {playbackActive}
+      onregenerated={(token) => (joinToken = token)} onended={() => (closed = true)} />
+    {#if connection === "reconnecting"}
+      <div class="border-b border-info bg-info/10 px-4 py-2 text-sm text-fg" role="status">Reconnecting…</div>
+    {/if}
 
     {#if loadError}
       <div class="flex-1 grid place-items-center p-6"><p class="text-error" role="alert">{loadError}</p></div>

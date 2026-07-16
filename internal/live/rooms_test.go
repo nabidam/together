@@ -171,6 +171,19 @@ func TestRegenerateToken_ReplacesValue(t *testing.T) {
 	}
 }
 
+func TestRoomToken_HostOnly(t *testing.T) {
+	ts, _, _, alice, bob := newStack(t)
+	id, want := createRoom(t, ts, alice, 1, "")
+
+	if code, _ := doReq(t, "GET", ts.URL, "/api/rooms/"+id+"/token", bob); code != 403 {
+		t.Fatalf("non-host token read want 403 got %d", code)
+	}
+	code, out := doReq(t, "GET", ts.URL, "/api/rooms/"+id+"/token", alice)
+	if code != 200 || out["joinToken"] != want {
+		t.Fatalf("host token read want current token %q, got %d %+v", want, code, out)
+	}
+}
+
 // TestRoomsAreEphemeral: a fresh hub over the same DB starts with no rooms,
 // while the durable media/account rows survive — the crash-recovery contract
 // (AC-5.6): rooms/chat vanish, library and accounts intact.
