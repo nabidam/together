@@ -365,6 +365,8 @@ Sandbox note (from CLAUDE.md): smoke-test with `curl --noproxy '*'` and `TOGETHE
 
 ## Task 15 — Room strip, Room menu, dialogs M2/M3/M4
 
+> **DONE** `3a0ba20` — Verified: `cd web && npm run build`, `node --test src/lib/*.test.js`, `go test ./...`, and `go test -race ./...` pass; `TestRoomToken_HostOnly` drives the real HTTP surface (non-host → 403, returning host receives the current join token), while the existing real-stack regeneration and teardown tests cover token replacement and `room_closed`. The room UI now uses its host-only token read to copy/regenerate invites, replaces the stream `window.confirm` with M4, and sends host room-end through M2.
+
 - **Objective:** Host powers land in the UI: copy link, regenerate (M3), end room (M2); the streaming fallback gets its real dialog (M4). (PLAN chunk 7, controls half.)
 - **Inputs:** Task 13's ui components; tasks 2/6 endpoints; task 10's confirm stand-in.
 - **Outputs:** `RoomStrip.svelte`, `RoomMenu.svelte`, `EndRoomDialog.svelte`, `RegenerateLinkDialog.svelte`, `PlayFromServerDialog.svelte`; AcquisitionPanel's `window.confirm` replaced.
