@@ -497,6 +497,8 @@ Sandbox note (from CLAUDE.md): smoke-test with `curl --noproxy '*'` and `TOGETHE
 
 ## Task 19 — AudioPlayer + S5 now-playing surfaces
 
+> **DONE** `2a7f777` — Evidence: `specs/001-core/evidence/task-19.txt`. The production-rendered audio component shows its title, mono duration, blob source, and arm control; Room switches on `kind='audio'`, keeps the video sync/status contract, omits CC/fullscreen, defaults the side panel open, and M1/S7 retain `video|audio` labels.
+
 - **Objective:** Audio rooms get the now-playing variant; pickers and admin label kinds. (PLAN chunk 8, frontend half.)
 - **Inputs:** Task 18's `kind='audio'` rows; task 16's SidePanel + transport.
 - **Outputs:** `AudioPlayer.svelte`, kind-switched Room, labeled M1/S7.

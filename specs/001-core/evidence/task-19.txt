@@ -1,0 +1,48 @@
+Task 19 verification evidence
+Implementation commit: 2a7f777
+
+Repository verify script: absent in this legacy cycle.
+Equivalent commands exercised live:
+  ./build.sh
+  node --test src/lib/*.test.js
+  go test ./... -count=1
+  go test -race ./... -count=1
+  go vet ./...
+  gofmt -l internal cmd
+  git diff --check
+
+Last output:
+  ✓ 4076 modules transformed.
+  ✓ built in 7.56s
+  built ./together (12M)
+  ℹ tests 12
+  ℹ pass 12
+  ℹ fail 0
+  ?   together/cmd/server [no test files]
+  ok  together/internal/auth
+  ok  together/internal/db
+  ok  together/internal/live
+  ok  together/internal/media
+  go test -race: all packages ok
+  go vet: no output (success)
+  gofmt -l: no output (success)
+  git diff --check: no output (success)
+
+Acceptance command:
+  NODE_ENV=production node --input-type=module -e '<Vite SSR-load and render AudioPlayer with an audio fixture; assert visible title, duration, blob source, and arm control>'
+Output:
+  AudioPlayer SSR acceptance: now-playing title, duration, audio source, and arm control rendered
+
+Contract assertion output:
+  PASS Room mounts AudioPlayer
+  PASS audio hides video-only controls
+  PASS audio defaults side panel open
+  PASS M1 labels kind
+  PASS S7 labels kind
+  PASS upload no longer asks client for kind
+
+Observed behavior:
+  The production component rendered "Now playing", "Audio Fixture", duration
+  "5:21", source "blob:fixture", and "Click to enable playback". Room selects
+  AudioPlayer for kind=audio, retains the acquisition/status path, omits CC and
+  fullscreen from audio transport, and uses SidePanel's audio default-open path.
