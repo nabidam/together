@@ -5,6 +5,7 @@
   import { revokeObjectURL } from "../lib/localfile.js";
   import { expectedPosition } from "../lib/sync.js";
   import AcquisitionPanel from "../components/AcquisitionPanel.svelte";
+  import AudioPlayer from "../components/AudioPlayer.svelte";
   import Player from "../components/Player.svelte";
   import RoomClosed from "../components/RoomClosed.svelte";
   import RoomStrip from "../components/RoomStrip.svelte";
@@ -103,6 +104,7 @@
   const ready = $derived(room !== null && media !== null);
   const disconnected = $derived(connection !== "connected");
   const playbackActive = $derived(Boolean(playbackSource && activity));
+  const isAudio = $derived(room?.kind === "audio");
 
   $effect(() => {
     if (!activity?.state) {
@@ -165,7 +167,11 @@
         <section class="flex-1 min-h-0 flex flex-col bg-void">
           <div class="flex-1 min-h-0 relative">
             {#if playbackSource && activity}
-              <Player {activity} {sock} {media} source={playbackSource} />
+              {#if isAudio}
+                <AudioPlayer {activity} {sock} {media} source={playbackSource} />
+              {:else}
+                <Player {activity} {sock} {media} source={playbackSource} />
+              {/if}
             {:else if activity}
               <AcquisitionPanel {media} kind={room.kind} onsource={setPlaybackSource} />
             {:else}
@@ -178,8 +184,10 @@
             </Button>
             <Slider value={[scrubPosition]} min={0} max={media.duration ?? 0} step={0.1} disabled={disconnected || !activity} onValueCommit={(value) => intent("seek", value[0])} aria-label="Seek playback" />
             <span class="hidden sm:inline whitespace-nowrap font-mono text-sm text-fg-strong">{timecode(scrubPosition)} <span class="text-fg/50">/ {timecode(media.duration)}</span></span>
-            <Button variant="ghost" size="icon-lg" disabled={disconnected || !activity} onclick={toggleCaptions} aria-label="Toggle captions"><Captions /></Button>
-            <Button variant="ghost" size="icon-lg" onclick={toggleFullscreen} aria-label="Fullscreen"><Maximize /></Button>
+            {#if !isAudio}
+              <Button variant="ghost" size="icon-lg" disabled={disconnected || !activity} onclick={toggleCaptions} aria-label="Toggle captions"><Captions /></Button>
+              <Button variant="ghost" size="icon-lg" onclick={toggleFullscreen} aria-label="Fullscreen"><Maximize /></Button>
+            {/if}
             <Button variant="ghost" size="icon-lg" onclick={() => (panelOpen = !panelOpen)} aria-label={panelOpen ? "Hide side panel" : "Show side panel"} aria-expanded={panelOpen}>
               {#if panelOpen}<PanelRightClose />{:else}<PanelRightOpen />{/if}
             </Button>

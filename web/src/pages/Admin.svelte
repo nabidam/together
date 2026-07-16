@@ -11,7 +11,7 @@
 
   let media = $state([]);
   let invites = $state([]);
-  let kind = $state("movie"), title = $state("");
+  let title = $state("");
   let file = $state(null), subtitle = $state(null);
   let progress = $state(null), error = $state("");
 
@@ -29,7 +29,7 @@
     e.preventDefault(); error = "";
     try {
       progress = 0;
-      await uploadMedia({ kind, title, file, subtitle, onProgress: (s, t) => (progress = s / t) });
+      await uploadMedia({ title, file, subtitle, onProgress: (s, t) => (progress = s / t) });
       title = ""; file = null; subtitle = null;
       e.target.reset();
       await load();
@@ -52,13 +52,7 @@
   <section class="border border-border bg-card p-6 flex flex-col gap-4">
     <span class="eyebrow">// upload media</span>
     <form onsubmit={submit} class="flex flex-col gap-3">
-      <div class="flex gap-2">
-        <select class="h-11 w-32 rounded-md border border-border bg-input px-3 text-fg-strong focus-visible:outline-2 focus-visible:outline-secondary focus-visible:outline-offset-2" bind:value={kind} aria-label="Media kind">
-          <option value="movie">movie</option>
-          <option value="music">music</option>
-        </select>
-        <Input class="h-11" placeholder="Title" bind:value={title} required />
-      </div>
+      <Input class="h-11" placeholder="Title" bind:value={title} required />
       <label class="flex flex-col gap-1 text-sm font-medium">Media file (.mp4 / .mkv / audio)
         <Input class="h-auto py-2" type="file" required onchange={(e) => (file = e.target.files[0])} />
       </label>
