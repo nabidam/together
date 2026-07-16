@@ -475,6 +475,8 @@ Sandbox note (from CLAUDE.md): smoke-test with `curl --noproxy '*'` and `TOGETHE
 
 ## Task 18 — Audio pipeline branch
 
+> **DONE** `819cd9c` — Verified: `go test ./internal/media -count=1`, `go test ./... -count=1`, `go test -race ./... -count=1`, `go vet ./...`, and `./build.sh` pass; lavfi-generated MP3 bytes survive ingest unchanged, lavfi Opus is transcoded to AAC in `.m4a` with no video codec, the unchanged H.264/AAC video fixture still produces `kind='video'`, and an authenticated `GET /api/media` reports the ingested Opus row as `kind='audio'`. A forged client `kind` is ignored, while the worker's probe selects both the persisted kind and the audio/video pipeline branch; `Plan` proves audio-only conversion contains no `libx264`.
+
 - **Objective:** Ingest handles pure-audio files without ever touching libx264; `kind` comes from the probe, not the client. (PLAN chunk 8, backend half.)
 - **Inputs:** V1 `pipeline.go` decision tree; task 1's kind vocabulary.
 - **Outputs:** audio branch in the worker; `upload.go` stops accepting a client-supplied kind.
