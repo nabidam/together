@@ -341,6 +341,8 @@ Sandbox note (from CLAUDE.md): smoke-test with `curl --noproxy '*'` and `TOGETHE
 
 ## Task 14 — Account surfaces on shadcn: Login, Register, Home, MediaPicker, Admin kind column
 
+> **DONE** `bb8e9eb` — Verified: `cd web && npm run build`, `node --test src/lib/*.test.js`, `go test ./... -count=1`, and `go test -race ./... -count=1` pass; the fresh `TestCreateRoom_Validation|TestCreateRoom_RejectsNonReadyMedia|TestListRooms_Shape` HTTP stack confirms ready-media room creation and room-list output.
+
 - **Objective:** S1/S2/S3/M1 adopt the design system; Admin table gains the kind column. (PLAN chunk 6, surfaces half.)
 - **Inputs:** Task 13's `components/ui/*`.
 - **Outputs:** restyled Login + new Register split, Home with skeleton/error/empty states, `MediaPickerDialog.svelte` (M1), Admin kind column.
