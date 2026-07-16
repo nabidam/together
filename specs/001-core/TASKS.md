@@ -458,6 +458,8 @@ Sandbox note (from CLAUDE.md): smoke-test with `curl --noproxy '*'` and `TOGETHE
 
 ## Task 17c — Provide participant status tooltips
 
+> **DONE** `d72c501` — Verified: `npm --prefix web run build`, `go test ./...`, and `node --test web/src/lib/*.test.js` pass; Participants now owns a TooltipProvider so dot status tooltips render on hover and focus without aborting Room.
+
 - **Objective:** Render participant status-dot tooltips without a missing context exception.
 - **Dependencies:** 17b.
 - **Files:** `web/src/components/Participants.svelte`.
