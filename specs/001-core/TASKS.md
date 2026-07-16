@@ -335,6 +335,8 @@ Sandbox note (from CLAUDE.md): smoke-test with `curl --noproxy '*'` and `TOGETHE
 - **Context pack (hints):** `web/src/app.css`, `web/package.json`, `web/vite.config.*`. **DESIGN.md §3–4** (the contract for this task). ARCHITECTURE §6 (stack), §7 (dep ceiling). UX not needed (no screen work).
 - **Do NOT:** no extra shadcn components beyond DESIGN.md §4's inventory; no light theme; no page restyles yet.
 
+> **DONE** `c6153f8` — Verified: `./build.sh`, `go test ./...`, `go test -race ./...`, and `node --test src/lib/*.test.js` all pass; the generated Button/Input/Card/Dialog/DropdownMenu/Skeleton/Alert/Tooltip/Table/Slider/AlertDialog inventory is present and Tailwind emits its NxCode semantic utilities, whose `--ring` resolves to cyan; a strict raw-color scan of non-generated components/pages is empty.
+
 ---
 
 ## Task 14 — Account surfaces on shadcn: Login, Register, Home, MediaPicker, Admin kind column
