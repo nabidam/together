@@ -456,6 +456,21 @@ Sandbox note (from CLAUDE.md): smoke-test with `curl --noproxy '*'` and `TOGETHE
 
 ---
 
+## Task 17c — Provide participant status tooltips
+
+- **Objective:** Render participant status-dot tooltips without a missing context exception.
+- **Dependencies:** 17b.
+- **Files:** `web/src/components/Participants.svelte`.
+- **Acceptance criteria:**
+  - Participant dots render in Room without `Context "Tooltip.Provider" not found`.
+  - Each dot’s hover and keyboard-focus tooltip continues to spell out its status.
+  - `npm --prefix web run build`, `go test ./...`, and `node --test web/src/lib/*.test.js` pass.
+- **Difficulty:** low.
+- **Context pack:** `web/src/components/Participants.svelte`, `web/src/components/ui/tooltip/*`, `UX.md` F1, `DESIGN.md` §4.
+- **Do NOT:** Do not change dot states, labels, or the 44px focusable target.
+
+---
+
 ## Task 18 — Audio pipeline branch
 
 - **Objective:** Ingest handles pure-audio files without ever touching libx264; `kind` comes from the probe, not the client. (PLAN chunk 8, backend half.)
