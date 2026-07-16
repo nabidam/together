@@ -414,7 +414,7 @@ Sandbox note (from CLAUDE.md): smoke-test with `curl --noproxy '*'` and `TOGETHE
 
 **Human walkthrough — completion artifact is the human's recorded result.** A skipped gate is marked `GATE SKIPPED`, never deleted.
 
-> **GATE BLOCKED (2026-07-16)** — The guest S6 Join room button is rendered by the shared Button primitive without `type="submit"`; its default is `type="button"`, so an entered name never reaches `POST /api/rooms/join`. The initial empty-name probe's 400 is expected and transitions S6 to the form. Fix in Task 17a, then re-run this gate with a newly created room after the server has started.
+> **GATE PASSED (2026-07-16, human walkthrough).** The styled room flow now completes after Tasks 17a–17c: guest join submits correctly, the transport Slider renders, and participant status tooltips render without a missing-provider exception. Gate 3 is cleared.
 
 - **Journey:** re-walk F1 fully styled, plus F4: kill the host tab mid-playback → guest playback continues, guest can pause/seek/chat (AC-5.5) → host reopens from Home → HOST badge + Room menu restored. Then the AC-1.6/1.7 regenerate walk.
 - **Observations required:** theater layout (player dominates, strip auto-hides), dot tooltips, reconnect banner disabling inputs, all three dialogs (M2/M3/M4), "Link copied" confirm.
