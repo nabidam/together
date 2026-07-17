@@ -298,6 +298,31 @@ func TestHelloOnReconnectCarriesActivityChatAndHost(t *testing.T) {
 	}
 }
 
+func TestTwoHostTabsCoexist(t *testing.T) {
+	ts, _, _, alice, _ := newStack(t)
+	room, _ := createRoom(t, ts, alice, 1, "")
+
+	first := dial(t, ts, room, alice)
+	firstHello := read(t, first)
+	if firstHello["you"].(map[string]any)["isHost"] != true {
+		t.Fatalf("first owner tab must retain host powers: %+v", firstHello)
+	}
+
+	second := dial(t, ts, room, alice)
+	secondHello := read(t, second)
+	if secondHello["you"].(map[string]any)["isHost"] != true {
+		t.Fatalf("second owner tab must also receive host powers: %+v", secondHello)
+	}
+	waitFor(t, first, "presence")
+
+	// Two tabs are independent clients: either may act, and the other must
+	// receive the authoritative update.
+	send(t, second, frame{"type": "intent", "action": "play"})
+	if activity := waitFor(t, first, "activity"); activity["activity"].(map[string]any)["state"].(map[string]any)["paused"] != false {
+		t.Fatalf("host-tab intent did not reach the other tab: %+v", activity)
+	}
+}
+
 func TestStatusNeverEntersWatchApply(t *testing.T) {
 	ts, _, _, alice, _ := newStack(t)
 	room, _ := createRoom(t, ts, alice, 1, "")

@@ -76,7 +76,7 @@ func TestClockGoingBackwardDoesNotRewind(t *testing.T) {
 		t.Fatalf("PositionAt must clamp, got %v", got)
 	}
 	s, _ = s.Apply("pause", 0, 500) // pause with regressed clock
-	if s.Position < 0 {
-		t.Fatalf("Position went negative: %v", s.Position)
+	if s.Position != 0 || s.UpdatedAt != 1000 {
+		t.Fatalf("backward apply must preserve the time anchor, got %+v", s)
 	}
 }

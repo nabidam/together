@@ -384,6 +384,41 @@ func TestJoinRoom_LiveCookieReusesIdentity(t *testing.T) {
 	}
 }
 
+func TestJoinRoom_ReconnectKeepsNameButDepartureFreesIt(t *testing.T) {
+	ts, hub, _, alice, _ := newStack(t)
+	_, tok := createRoom(t, ts, alice, 1, "")
+
+	code, _, cookie := postJoin(t, ts.URL, tok, "Ali", "")
+	if code != 200 || cookie == "" {
+		t.Fatalf("first join failed: code=%d cookie=%q", code, cookie)
+	}
+
+	// A socket drop does not delete the guest session, so reopening with its
+	// cookie must retain the exact display name rather than minting "Ali (2)".
+	if code, _, replacement := postJoin(t, ts.URL, tok, "Ali", "together_guest="+cookie); code != 200 || replacement != "" {
+		t.Fatalf("reconnect must reuse its session: code=%d replacement=%q", code, replacement)
+	}
+
+	hub.mu.Lock()
+	if got := hub.guests[cookie].name; got != "Ali" {
+		hub.mu.Unlock()
+		t.Fatalf("reconnected guest name = %q, want Ali", got)
+	}
+	delete(hub.guests, cookie) // Session departure, unlike a transient socket drop.
+	hub.mu.Unlock()
+
+	code, _, nextCookie := postJoin(t, ts.URL, tok, "Ali", "")
+	if code != 200 || nextCookie == "" {
+		t.Fatalf("join after departure failed: code=%d cookie=%q", code, nextCookie)
+	}
+	hub.mu.Lock()
+	got := hub.guests[nextCookie].name
+	hub.mu.Unlock()
+	if got != "Ali" {
+		t.Fatalf("departed name must be reusable without a suffix, got %q", got)
+	}
+}
+
 func TestJoinRoom_RoomFull(t *testing.T) {
 	ts, _, _, alice, _ := newStack(t)
 	_, tok := createRoom(t, ts, alice, 1, "")

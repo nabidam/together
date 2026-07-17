@@ -35,4 +35,5 @@ test("in sync at normal rate → nothing", () => {
 test("backward server clock does not rewind", () => {
   const s = { paused: false, position: 50, rate: 1, updatedAt: 10_000 };
   assert.equal(expectedPosition(s, 5_000), 50);
+  assert.equal(expectedPosition(s, 12_000), 52);
 });

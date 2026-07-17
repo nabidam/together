@@ -1,0 +1,30 @@
+Task 20 verification — 2026-07-17
+
+Command: go test ./... -race
+
+?   	together/cmd/server	[no test files]
+ok  	together/internal/auth	(cached)
+ok  	together/internal/db	(cached)
+ok  	together/internal/live	(cached)
+ok  	together/internal/media	(cached)
+
+Command: cd web && node --test src/lib/*.test.js
+
+✔ checkFileSize accepts a file whose bytes match room media
+✔ checkFileSize reports the selected and expected byte counts on mismatch
+✔ replaceObjectURL revokes the previous blob URL before creating the replacement
+✔ paused state does not advance
+✔ playing state advances with rate
+✔ big drift → hard seek
+✔ small drift behind → speed up
+✔ small drift ahead → slow down
+✔ in sync at nudged rate → reset rate
+✔ in sync at normal rate → nothing
+✔ backward server clock does not rewind
+✔ connect reports connection changes and forwards V2 frames
+ℹ tests 12
+ℹ pass 12
+ℹ fail 0
+ℹ duration_ms 94.510079
+
+Also passed live: go vet ./..., gofmt -l internal cmd, and git diff --check.
