@@ -4,12 +4,25 @@ After=network.target
 
 [Service]
 User=together
+Group=together
 Environment=TOGETHER_ADDR=127.0.0.1:8080
 Environment=TOGETHER_DATA=/var/lib/together
 EnvironmentFile=-/etc/together.env
 ExecStart=/usr/local/bin/together
 Restart=on-failure
+RestartSec=5
 MemoryMax=1200M
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+LockPersonality=true
+RestrictSUIDSGID=true
+ReadWritePaths=/var/lib/together
 
 [Install]
 WantedBy=multi-user.target

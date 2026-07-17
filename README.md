@@ -1,8 +1,31 @@
-# together
+# Together
 
-Private, self-hosted watch-together for up to ten people. It runs as one Go + SQLite binary with an embedded Svelte 5 app. Rooms, guest sessions, chat, and playback state are intentionally in-memory; accounts, invite codes, and uploaded media persist.
+Together is a private, self-hosted watch-together server for small groups. It is a single Go binary with an embedded Svelte web app, SQLite persistence, in-memory rooms, and synchronized local-file-first video or audio playback.
 
-Participants normally download or load their own copy of a video or audio file, then synchronize playback through WebSocket intents. Server streaming is an explicit fallback, never the default. Media is processed once at upload time; the app never live-transcodes.
+Rooms, guest sessions, presence, chat, and playback state are intentionally ephemeral. Accounts, invite codes, and media metadata persist in SQLite. Media is processed once at upload time—Together never live-transcodes.
+
+## Quick start
+
+Download the release archive for your Linux architecture, verify its checksum, and install its single `together` binary. The server needs `ffmpeg` and `ffprobe` on `PATH` to process uploads.
+
+```sh
+sha256sum --check SHA256SUMS
+tar -xzf together_linux_amd64.tar.gz
+sudo install -m 0755 together /usr/local/bin/together
+
+ADMIN_USER=admin ADMIN_PASS='choose-a-long-password' together
+```
+
+Open `http://127.0.0.1:8080` only for local testing. For an Internet-facing server, follow the [operations guide](docs/OPERATIONS.md) to run Together behind Caddy with HTTPS.
+
+## Supported release targets
+
+Release artifacts are static, bundled-web Linux binaries for:
+
+- `linux/amd64`
+- `linux/arm64`
+
+They require no Node.js, Go toolchain, or frontend files at runtime. They do require host-installed `ffmpeg`/`ffprobe` for media ingestion and a writable data directory. See [requirements and upgrades](docs/OPERATIONS.md#requirements) for the complete list.
 
 ## Development
 
@@ -14,50 +37,42 @@ ADMIN_USER=admin ADMIN_PASS=changeme go run ./cmd/server
 cd web && npm run dev
 ```
 
-Useful environment variables:
-
-| Variable | Default | Purpose |
-|---|---:|---|
-| `TOGETHER_ADDR` | `:8080` | HTTP listen address |
-| `TOGETHER_DATA` | `./data` | SQLite database and media directory |
-| `ADMIN_USER`, `ADMIN_PASS` | unset | Seed the first admin on first boot |
-| `TOGETHER_ROOM_IDLE` | `30m` | Time a room remains available after its last WebSocket client leaves |
-
-For sandbox smoke tests, use a free address such as `TOGETHER_ADDR=:18080` and `curl --noproxy '*'`.
-
-## Verification
+## Verification and release builds
 
 ```sh
-go test ./... -race
-gofmt -l internal cmd
-(cd web && node --test src/lib/*.test.js)
-(cd web && npm run build)
-```
+./scripts/verify.sh
 
-`npm run build` writes generated assets under `cmd/server/webdist/`. Restore its committed `index.html` placeholder before committing frontend build output:
+# Build static Linux amd64 and arm64 archives plus SHA256SUMS in dist/.
+./scripts/release.sh
 
-```sh
-git restore cmd/server/webdist/index.html
-```
-
-## Production
-
-Install ffmpeg and Caddy, then build the self-contained binary:
-
-```sh
+# Build a single binary for the host architecture at ./together.
 ./build.sh
 ```
 
-Copy `together` to `/usr/local/bin/`, provision `/var/lib/together` for the service user, set `ADMIN_USER` and `ADMIN_PASS` in `/etc/together.env` for the first boot, then install the units in `deploy/` and configure `deploy/Caddyfile` with the deployment domain.
+`scripts/release.sh` builds the frontend once, embeds it through `go:embed`, cross-compiles the supported targets, and restores the tracked web placeholder before exiting. The release archive contains exactly one executable.
 
-## Documentation
+## Operations and security
+
+- [Server setup, Caddy reverse proxy, systemd, backups, restore, and upgrades](docs/OPERATIONS.md)
+- [Security model and hardening checklist](docs/HARDENING.md)
+- [Responsible vulnerability reporting](SECURITY.md)
+
+The supplied systemd unit binds the app to `127.0.0.1:8080`; Caddy is the public HTTPS endpoint. Do not expose the application port directly to the Internet.
+
+## Contributing
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening an issue or pull request. By contributing, you agree that your contributions are licensed under [Apache-2.0](LICENSE).
+
+## Project documentation
 
 | File | Purpose |
 |---|---|
-| `specs/001-core/SPEC.md` | Product scope and constraints |
-| `specs/001-core/PRD.md` | User stories and acceptance criteria |
-| `ARCHITECTURE.md` | Durable and in-memory contracts, API, and wire protocol |
-| `UX.md` / `DESIGN.md` / `design.md` | Screen behavior, component adoption, and visual tokens |
+| `ARCHITECTURE.md` | Runtime contracts, API, WebSocket protocol, and configuration |
+| `UX.md` / `DESIGN.md` / `design.md` | Product flow and visual-system contracts |
 | `CONVENTIONS.md` | Code, test, commit, and UI rules |
-| `CLAUDE.md` | Maintainer onboarding and operational hazards |
-| `docs/research/2026-07-03-prior-art-and-process.md` | Research and decision log |
+| `CLAUDE.md` | Maintainer-oriented repository guide |
+| `specs/` | Product, implementation, evidence, and review history |
+
+## License
+
+Copyright 2026 Together contributors. Licensed under the [Apache License 2.0](LICENSE).

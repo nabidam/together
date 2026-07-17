@@ -13,6 +13,7 @@
 #   install -m 755 deploy/backup.sh /usr/local/bin/together-backup.sh
 #   umask 077; head -c 32 /dev/urandom | base64 > /etc/together-restic.pass
 #   chown together /etc/together-restic.pass
+#   install -d -o together -g together -m 700 /var/backups/together
 #   cp deploy/together-backup.{service,timer} /etc/systemd/system/
 #   systemctl enable --now together-backup.timer
 #   # verify: systemctl start together-backup.service && journalctl -u together-backup
@@ -38,5 +39,5 @@ sqlite3 "$DB" ".backup '$SNAP'"
 # Init the repo on first run (idempotent).
 restic cat config >/dev/null 2>&1 || restic init
 
-restic backup --tag together-db "$SNAP"
+restic backup --stdin --stdin-filename together.db --tag together-db < "$SNAP"
 restic forget --tag together-db --keep-daily 7 --keep-weekly 4 --prune
