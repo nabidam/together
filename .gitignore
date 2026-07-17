@@ -2,3 +2,4 @@ data/
 web/node_modules/
 cmd/server/webdist/
 together
+dist/
