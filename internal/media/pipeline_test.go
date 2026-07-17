@@ -111,6 +111,49 @@ func TestProcess_AudioFixtures(t *testing.T) {
 		}
 	})
 
+	t.Run("mp3 with attached artwork remains audio", func(t *testing.T) {
+		dir := t.TempDir()
+		d, err := db.Open(filepath.Join(dir, "t.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer d.Close()
+		res, err := d.Exec(`INSERT INTO media (kind, title, status, orig_name) VALUES ('video','Artwork MP3','processing','artwork.mp3')`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		id, _ := res.LastInsertId()
+		os.MkdirAll(filepath.Join(dir, "uploads"), 0o755)
+		os.MkdirAll(filepath.Join(dir, "media"), 0o755)
+		src := UploadPath(dir, id)
+		cmd := exec.Command("ffmpeg", "-y",
+			"-f", "lavfi", "-i", "sine=frequency=550:duration=1",
+			"-f", "lavfi", "-i", "color=c=red:s=32x32",
+			"-map", "0:a", "-map", "1:v", "-c:a", "libmp3lame", "-c:v", "mjpeg",
+			"-disposition:v:0", "attached_pic", "-shortest", "-f", "mp3", src)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("fixture: %v\n%s", err, out)
+		}
+
+		info, err := Probe(src)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.VCodec != "" || info.ACodec != "mp3" {
+			t.Fatalf("attached artwork must not classify as video: %+v", info)
+		}
+		if err := process(d, dir, id); err != nil {
+			t.Fatal(err)
+		}
+		var kind, status, output string
+		if err := d.QueryRow(`SELECT kind, status, file_path FROM media WHERE id=?`, id).Scan(&kind, &status, &output); err != nil {
+			t.Fatal(err)
+		}
+		if kind != "audio" || status != "ready" || filepath.Ext(output) != ".mp3" {
+			t.Fatalf("kind=%s status=%s output=%s", kind, status, output)
+		}
+	})
+
 	t.Run("opus transcoded to aac m4a", func(t *testing.T) {
 		dir := t.TempDir()
 		d, err := db.Open(filepath.Join(dir, "t.db"))

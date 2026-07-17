@@ -33,8 +33,11 @@ func Probe(path string) (Info, error) {
 			Duration   string `json:"duration"`
 		} `json:"format"`
 		Streams []struct {
-			CodecType string `json:"codec_type"`
-			CodecName string `json:"codec_name"`
+			CodecType   string `json:"codec_type"`
+			CodecName   string `json:"codec_name"`
+			Disposition struct {
+				AttachedPicture int `json:"attached_pic"`
+			} `json:"disposition"`
 		} `json:"streams"`
 	}
 	if err := json.Unmarshal(out, &p); err != nil {
@@ -45,7 +48,9 @@ func Probe(path string) (Info, error) {
 	for _, s := range p.Streams {
 		switch s.CodecType {
 		case "video":
-			if info.VCodec == "" {
+			// Album artwork is exposed as a video stream by ffprobe, but it
+			// does not make an audio file a video upload.
+			if s.Disposition.AttachedPicture == 0 && info.VCodec == "" {
 				info.VCodec = s.CodecName
 			}
 		case "audio":
