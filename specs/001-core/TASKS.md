@@ -207,6 +207,8 @@ Sandbox note (from CLAUDE.md): smoke-test with `curl --noproxy '*'` and `TOGETHE
 
 > **SOFT PASS (machine-driven, 2026-07-15).** Not the human demo — a scripted orchestrator (`coder/websocket` + `net/http`, throwaway `cmd/gatewalk`, deleted after) drove all of ARCHITECTURE §10 steps 1–4 and 7–11 against a live `TOGETHER_ADDR=:18080` server on a fresh data dir, seeding one `status='ready'` media row (no bytes streamed — protocol gate only). 12 observable frames verified byte-for-byte per §4.5: host `hello` (`you.isHost=true, name=admin`) + guest `hello` (`you.isGuest=true, name=Ali`); host `presence` broadcast on guest join; `intent:play` from host echoed `activity` (`rate=1`) to **both**; `chat` both directions echoed to both connections (`{name,isGuest,body,createdAt}`); guest socket killed then redialed → `hello` restored the 2-msg chat ring **and** the mid-scene `activity` (`version=2, paused=false`); host `DELETE /api/rooms/{id}` → survivor received `room_closed`. Caveat: the presence frame the host consumed at step 3 was its own join self-broadcast (count 1), not the guest-join frame — frame-ordering artifact of the scripted reader, not a protocol defect; the guest is present (guest `hello` + subsequent broadcasts confirm). **The human-witnessed demo (two `websocat` terminals) is NOT waived — this is a soft pass to unblock; re-walk at the v1 exit bar.**
 
+> **GATE PASSED (2026-07-17, human re-walk).** The user reported all gate journeys passed with no deviations, resolving the deferred human witness for this protocol journey.
+
 ---
 
 ## Task 8 — Frontend: guest join route + Home list
@@ -308,6 +310,8 @@ Sandbox note (from CLAUDE.md): smoke-test with `curl --noproxy '*'` and `TOGETHE
 **Human walkthrough — completion artifact is the human's recorded result. Milestone A ends here.** A skipped gate is marked `GATE SKIPPED`, never deleted.
 
 > **GATE SKIPPED (2026-07-16)** — Blocked before the guest-join step: room creation returns `joinToken`, but the current host UI discards it and exposes no visible copy-invite-link control. The token endpoint can be invoked manually from DevTools, but that is not a valid human UI walkthrough. Re-run this gate after the host-facing invite-link control exists.
+
+> **GATE PASSED (2026-07-17, human re-walk).** The user reported all gate journeys passed with no deviations, resolving this previously skipped walking-skeleton journey.
 
 - **Journey:** two browsers (normal + incognito), real uploaded video, walking UX F1 steps 1–11 verbatim: host signs in → creates room → copies link → guest joins named "Ali" → downloads media → loads file → size check → File Ready dot on both screens → host plays → sync within bands → guest scrubs → both jump → guest connection killed and restored mid-scene via the invite link (same name, mid-scene position) → chat → host ends room → both see Room Closed; library + accounts intact.
 - **Observations required:** every step, plus the three dot states changing on the *other* browser's participant list. Ugly V1 styling acceptable; **any faked step fails the gate.**
@@ -535,6 +539,8 @@ Sandbox note (from CLAUDE.md): smoke-test with `curl --noproxy '*'` and `TOGETHE
 - **Context pack (hints):** `internal/live/*_test.go`, `internal/live/watch_test.go`, `web/src/lib/sync.test.js`, `web/src/lib/ws.js`, `README.md`, `CLAUDE.md`, PRD §6 + §9. ARCHITECTURE §4–5, §9. No UX/DESIGN.
 - **Do NOT:** no new features; no backlog items sneaking in.
 
+> **DONE** `5e68055` — Evidence: `specs/001-core/evidence/task-20.txt`. Automated hardening and documentation verification are green; the user recorded every PRD §6 acceptance criterion and all gate journeys as passed with no deviations in `.superpowers/sdd/progress.md`.
+
 ---
 
 ## Task 21 — DEMO GATE 4: v1 exit bar
@@ -548,6 +554,8 @@ Sandbox note (from CLAUDE.md): smoke-test with `curl --noproxy '*'` and `TOGETHE
 - **Observations required:** all three, on the `./build.sh` binary.
 - **Dependencies:** 20.
 - **Completion artifact:** the human's walkthrough result logged on this task.
+
+> **GATE PASSED (2026-07-17, human walkthrough).** All recorded gate journeys passed with no deviations. On the production `./build.sh` binary, the user completed the audio-room flow, the invite-code and resumable-upload lifecycle (including failed processing and deletion), and the crash drill confirming that accounts, library, and invite codes survive while the live room and chat vanish. The Task 20 two-browser PRD §6 acceptance log is recorded in `.superpowers/sdd/progress.md`.
 
 ---
 
