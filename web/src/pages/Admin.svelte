@@ -62,7 +62,7 @@
       {#if progress !== null}
         <p class="font-mono text-sm text-primary">[{bar(progress)}] {Math.round(progress * 100)}% uploading…</p>
       {:else}
-        <Button class="h-11 self-start">Upload</Button>
+        <Button class="h-11 self-start" type="submit">Upload</Button>
       {/if}
       {#if error}<p class="text-sm text-error" role="alert">{error}</p>{/if}
     </form>
