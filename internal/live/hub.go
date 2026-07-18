@@ -348,6 +348,19 @@ func (h *Hub) dispatch(r *Room, c *client, m inMsg) {
 		})
 
 	case "start":
+		// A room is permanently scoped to the media selected at creation.
+		// Read the fixed id while holding the room lock so a mismatched start
+		// cannot replace its activity with another ready library item.
+		r.mu.Lock()
+		matchesRoomMedia := m.MediaID == r.mediaID
+		r.mu.Unlock()
+		if !matchesRoomMedia {
+			select {
+			case c.send <- marshal(map[string]any{"type": "error", "body": "media does not match room"}):
+			default:
+			}
+			return
+		}
 		if !h.mediaReady(m.MediaID) {
 			select {
 			case c.send <- marshal(map[string]any{"type": "error", "body": "media not ready"}):

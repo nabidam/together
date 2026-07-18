@@ -172,6 +172,67 @@ func TestActivitySync(t *testing.T) {
 	}
 }
 
+func TestWSStart_RejectsMediaOutsideRoomScope(t *testing.T) {
+	ts, hub, d, alice, _ := newStack(t)
+	d.Exec(`INSERT INTO media (kind, title, status, file_path, size_bytes) VALUES ('video','Other Movie','ready','other.mp4',10)`)
+	room, token := createRoom(t, ts, alice, 1, "")
+	guest := joinAsGuest(t, ts, token, "Casey")
+	c := dial(t, ts, room, guest)
+	read(t, c) // hello
+
+	r, ok := hub.getRoom(room)
+	if !ok {
+		t.Fatal("room disappeared")
+	}
+	r.mu.Lock()
+	before := *r.watch
+	r.mu.Unlock()
+
+	send(t, c, frame{"type": "start", "mediaId": 2})
+	if f := waitFor(t, c, "error"); f["body"] != "media does not match room" {
+		t.Fatalf("wrong fixed-media error: %+v", f)
+	}
+
+	r.mu.Lock()
+	after := *r.watch
+	r.mu.Unlock()
+	if after.MediaID != before.MediaID || after.Version != before.Version || after.Position != before.Position {
+		t.Fatalf("mismatched start changed activity: before=%+v after=%+v", before, after)
+	}
+}
+
+func TestWSStart_RoomMediaAndControlsRemainAvailable(t *testing.T) {
+	ts, _, _, alice, bob := newStack(t)
+	room, _ := createRoom(t, ts, alice, 1, "")
+	a := dial(t, ts, room, alice)
+	read(t, a) // hello
+	b := dial(t, ts, room, bob)
+	read(t, b) // hello
+	waitFor(t, a, "presence")
+
+	send(t, b, frame{"type": "start", "mediaId": 1})
+	if f := waitFor(t, a, "activity"); f["activity"].(map[string]any)["state"].(map[string]any)["mediaId"] != float64(1) {
+		t.Fatalf("room-media start did not broadcast its activity: %+v", f)
+	}
+
+	send(t, b, frame{"type": "intent", "action": "play"})
+	if f := waitFor(t, a, "activity"); f["activity"].(map[string]any)["state"].(map[string]any)["paused"] != false {
+		t.Fatalf("play changed after fixed-media guard: %+v", f)
+	}
+	send(t, b, frame{"type": "intent", "action": "seek", "position": 42})
+	if f := waitFor(t, a, "activity"); f["activity"].(map[string]any)["state"].(map[string]any)["position"] != float64(42) {
+		t.Fatalf("seek changed after fixed-media guard: %+v", f)
+	}
+	send(t, b, frame{"type": "intent", "action": "pause"})
+	if f := waitFor(t, a, "activity"); f["activity"].(map[string]any)["state"].(map[string]any)["paused"] != true {
+		t.Fatalf("pause changed after fixed-media guard: %+v", f)
+	}
+	send(t, b, frame{"type": "end"})
+	if f := waitFor(t, a, "activity"); f["activity"] != nil {
+		t.Fatalf("end changed after fixed-media guard: %+v", f)
+	}
+}
+
 func TestHelloCarriesActivityForLateJoiner(t *testing.T) {
 	ts, _, _, alice, bob := newStack(t)
 	room, _ := createRoom(t, ts, alice, 1, "")
