@@ -392,6 +392,8 @@ layer = "contract"
 
 **Context pack:** `build.sh`, `scripts/verify.sh`, `cmd/server/main.go`, relevant API contracts in `ARCHITECTURE.md` §4, PLAN Gate 1, task-6 evidence. Backend/journey work; no UI design context.
 
+> **DONE** `0908e70` — Evidence: `specs/003-security-hardening/evidence/task-7.txt`. `scripts/security-e2e.sh` builds and drives the production binary with self-created disposable state, asserting the complete Gate 1 authentication and room-boundary journey. `./scripts/verify.sh` passes with the journey included.
+
 ## Task 8 — Enforce upload request and declared-size boundaries
 
 Restore the documented upload size contract and make every upload body bounded without buffering media in memory.
