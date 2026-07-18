@@ -4,7 +4,7 @@ Living document — the current technical truth for the V2 refactor (ephemeral r
 
 ## 1. System overview
 
-One Go monolith (single static binary) behind Caddy (TLS termination) on a 2 vCPU / 2 GB VPS. SQLite (WAL) holds only durable data: accounts, sessions, invite codes, media library, subtitles, pipeline jobs. Everything room-shaped — rooms, presence, chat, playback state, guest sessions, invite tokens — lives **in server memory** and dies with the room or the process.
+One Go monolith (single static binary) behind Caddy or Nginx (TLS termination) on a 2 vCPU / 2 GB VPS. SQLite (WAL) holds only durable data: accounts, sessions, invite codes, media library, subtitles, pipeline jobs. Everything room-shaped — rooms, presence, chat, playback state, guest sessions, invite tokens — lives **in server memory** and dies with the room or the process.
 
 The server is a state authority, not a media streamer: during synced playback each client plays a **local file** (`blob:` objectURL) and exchanges only JSON over WebSocket. Media bytes leave the server only for (a) one-time authed downloads, (b) subtitle files, (c) the explicit opt-in streaming fallback.
 
@@ -263,7 +263,7 @@ Player contract (unchanged V1 core): user actions send intents only; the `<video
 ## 7. Dependency graph
 
 ```
-Browsers ── HTTPS ──> Caddy (TLS) ──> together binary (:8080)
+Browsers ── HTTPS ──> Caddy or Nginx (TLS) ──> together binary (:8080)
                                         ├─ net/http ServeMux ── go:embed SPA (+ SPA fallback)
                                         ├─ internal/auth ──────────┐
                                         ├─ internal/live (hub ← watch) ── in-memory rooms
@@ -320,4 +320,4 @@ Every F2–F4 step reduces to the same contract rows (F2: steps 5–6; F3: ident
 
 ## 11. Decision log
 
-- **2026-07-18 — Security boundaries stay process-local and explicit.** Authentication throttles, room quotas, token indexing, and upload byte limits are enforced at their server boundaries without new runtime dependencies. `scripts/security-e2e.sh` drives the built production binary using only self-created disposable state; it verifies the complete kernel journey, restart durability, and cleanup on an injected failure. Caddy is trusted for `X-Forwarded-For` only because it is loopback-facing.
+- **2026-07-18 — Security boundaries stay process-local and explicit.** Authentication throttles, room quotas, token indexing, and upload byte limits are enforced at their server boundaries without new runtime dependencies. `scripts/security-e2e.sh` drives the built production binary using only self-created disposable state; it verifies the complete kernel journey, restart durability, and cleanup on an injected failure. The selected loopback-facing proxy (Caddy or Nginx) is trusted for `X-Forwarded-For` only because it is loopback-facing.

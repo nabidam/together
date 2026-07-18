@@ -16,7 +16,7 @@ sudo install -m 0755 together /usr/local/bin/together
 ADMIN_USER=admin ADMIN_PASS='choose-a-password-of-at-least-12-characters' together
 ```
 
-Open `http://127.0.0.1:8080` only for local testing. For an Internet-facing server, follow the [operations guide](docs/OPERATIONS.md) to run Together behind Caddy with HTTPS.
+Open `http://127.0.0.1:8080` only for local testing. For an Internet-facing server, follow the [operations guide](docs/OPERATIONS.md) to run Together behind Caddy or Nginx with HTTPS; it also covers temporary local sharing through ngrok and the viable free-tier hosting option.
 
 ## Supported release targets
 
@@ -55,11 +55,11 @@ cd web && npm run dev
 
 ## Operations and security
 
-- [Server setup, Caddy reverse proxy, systemd, backups, restore, and upgrades](docs/OPERATIONS.md)
+- [Server setup, Caddy or Nginx reverse proxy, ngrok local sharing, free-tier hosting, systemd, backups, restore, and upgrades](docs/OPERATIONS.md)
 - [Security model and hardening checklist](docs/HARDENING.md)
 - [Responsible vulnerability reporting](SECURITY.md)
 
-The supplied systemd unit binds the app to `127.0.0.1:8080`; Caddy is the public HTTPS endpoint. Do not expose the application port directly to the Internet.
+The supplied systemd unit binds the app to `127.0.0.1:8080`; Caddy or Nginx is the public HTTPS endpoint. Do not expose the application port directly to the Internet.
 
 On first boot, Together requires a non-empty `ADMIN_USER` and an `ADMIN_PASS` of at least 12 Unicode code points. `TOGETHER_MAX_UPLOAD_BYTES` sets a positive per-upload limit and defaults to 20 GiB; see the [operations guide](docs/OPERATIONS.md#upload-capacity) for sizing and proxy-trust guidance.
 

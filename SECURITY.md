@@ -12,4 +12,4 @@ Please allow time for triage and a fix before public disclosure. Do not access d
 
 ## Deployment baseline
 
-Together is intended to run behind a TLS-terminating reverse proxy, bound to loopback only, under a dedicated unprivileged account. Follow [docs/HARDENING.md](docs/HARDENING.md) before making an instance Internet-facing.
+Together is intended to run behind a TLS-terminating Caddy or Nginx reverse proxy, bound to loopback only, under a dedicated unprivileged account. Follow [docs/HARDENING.md](docs/HARDENING.md) before making an instance Internet-facing.

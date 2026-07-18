@@ -4,10 +4,10 @@ Use this checklist before making an instance public. It complements, rather than
 
 ## Network and TLS
 
-- Run Together only on `127.0.0.1:8080`; put Caddy in front of it for TLS.
+- Run Together only on `127.0.0.1:8080`; put Caddy or Nginx in front of it for TLS.
 - Permit inbound 80/443 and SSH only; do not expose 8080.
-- Replace the example Caddy hostname before loading the configuration.
-- Keep Caddy and the operating system patched. Verify certificate renewal with `systemctl status caddy` and Caddy logs.
+- Replace the example Caddy or Nginx hostname before loading the configuration.
+- Keep the selected proxy and the operating system patched. Verify certificate renewal with `systemctl status caddy` or `systemctl status nginx` and the corresponding logs.
 - Together trusts `X-Forwarded-For` only from a loopback peer. Keep the app bound to loopback and do not put an untrusted local proxy in front of it; direct non-loopback clients cannot choose their rate-limit identity.
 
 ## Process isolation and secrets
