@@ -27,6 +27,8 @@ Living document. Applies to the V2 codebase (ephemeral rooms + local playback). 
 ### Go
 - Wrap with context at each boundary: `fmt.Errorf("join room %s: %w", id, err)`. Lowercase messages, no trailing punctuation.
 - HTTP: correct status + `{"error": "human-readable message"}` — the one error shape everywhere. Never leak paths or stack traces. Join-token probes get an undifferentiated 404 (no live-room oracle).
+- Security boundaries are server-enforced: first boot requires a non-empty admin user and a password of at least 12 Unicode code points; failed login/register requests use bounded per-IP token buckets; a loopback proxy alone may supply `X-Forwarded-For`. Keep `429` JSON errors paired with integer `Retry-After`.
+- Externally controlled collections and bodies need an explicit server budget. Live rooms cap connections at 12, owners at 10 rooms, and the process at 100 rooms. Upload creation JSON caps at 4 KiB, chunks at 8 MiB, subtitles at 10 MiB; declared totals and `Upload-Length` are checked before writes. Oversize bodies are `413`; offset, total, and incomplete-upload failures are `409`.
 - WebSocket: recoverable client mistakes → `error` frame, connection stays open. Repeated protocol violations → close that connection only.
 - Panics: none in request paths by design, but every goroutine touching a room carries the per-room `recover()` (log with room id → tear down that room → process keeps serving). This is load-bearing (NFR-7) — never remove it.
 - Logging: stdlib `log.Printf`, one line per event, `key=value` tail: `log.Printf("room closed id=%s reason=%s", id, reason)`. No framework, no levels.
@@ -53,6 +55,7 @@ Living document. Applies to the V2 codebase (ephemeral rooms + local playback). 
 - Frontend: only pure lib logic is unit-tested (`node --test`, zero frameworks): `sync.js`, `localfile.js`. Component behavior = `npm run build` + manual two-browser checks logged in `.superpowers/sdd/progress.md`.
 - The sync state machine (`internal/live/watch.go` ↔ `web/src/lib/sync.js`) keeps mirrored suites — changing one side without both suites updated is an incomplete change.
 - Every non-trivial branch (validation, auth gates, limits, suffixing) has a test that fails if the logic breaks.
+- `scripts/security-e2e.sh` is the production-composition regression journey. It owns its disposable data directory, must clean up on success, signal, and `TOGETHER_E2E_INJECT_FAILURE=1`, and never uses production credentials or data. `verify.sh` runs it when ffmpeg and ffprobe are available; otherwise it prints the explicit skip and the release gate still runs it.
 
 ## Commit style
 

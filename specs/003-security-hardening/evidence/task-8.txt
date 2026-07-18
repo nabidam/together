@@ -1,0 +1,17 @@
+Task 8 verification
+
+Command:
+cd web && npm run build && git restore ../cmd/server/webdist/index.html && cd .. && ./scripts/verify.sh && git diff --check
+
+Output (final lines):
+✓ built in 7.96s
+?   	together/cmd/server	[no test files]
+ok  	together/internal/auth	(cached)
+ok  	together/internal/db	(cached)
+ok  	together/internal/live	(cached)
+ok  	together/internal/media	15.775s
+
+Behavior exercised by internal/media TestUploadBoundaries and
+TestLegacyUploadEstablishesLengthOnce: exact two-chunk 16 MiB completion and
+queueing; 4 KiB+1 JSON, 8 MiB+1 chunk, 10 MiB+1 subtitle, overrun, premature
+finish, maximum-size, and legacy Upload-Length conflict rejection.

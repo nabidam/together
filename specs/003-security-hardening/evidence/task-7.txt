@@ -1,0 +1,30 @@
+Task 7 — Crystallize Gate 1 as a disposable production journey
+
+Command: ./scripts/verify.sh
+
+Result: PASS
+
+Live verification tail:
+
+  ?    together/cmd/server  [no test files]
+  ok   together/internal/auth  (cached)
+  ok   together/internal/db  (cached)
+  ok   together/internal/live  (cached)
+  ok   together/internal/media  (cached)
+  ✔ tests 12
+  ✔ pass 12
+  ✔ fail 0
+  vite v6.4.3 building for production...
+  ✓ 4076 modules transformed.
+  ✓ built in 7.13s
+  built ./together (12M)
+  security-e2e: passed
+
+The production journey builds and launches only the production binary with a
+fresh mktemp data directory. It verifies weak first boot rejection; strong
+boot and credential-free restart; invite/register and login throttling;
+malformed proxy handling; ready-media room creation; guest joining; twelve
+live WebSocket admissions with a policy-closed thirteenth; fixed-media start
+authorization; token no-oracle behavior; idle cleanup; owner room quota; and
+the final health check. Its EXIT/HUP/INT/TERM trap terminates the child server
+and removes only its self-created temporary directory.

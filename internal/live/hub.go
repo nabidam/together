@@ -22,8 +22,9 @@ import (
 // reading durable media rows at room creation, never for room state.
 type Hub struct {
 	db     *sql.DB
-	mu     sync.Mutex // guards rooms map and guests map
+	mu     sync.Mutex // guards rooms, tokens, and guests maps
 	rooms  map[string]*Room
+	tokens map[string]*Room         // current join token -> room; stale tokens are removed
 	guests map[string]*GuestSession // keyed by the together_guest cookie token
 	idle   time.Duration            // TOGETHER_ROOM_IDLE — empty-room close delay (ARCHITECTURE §9)
 }
@@ -143,7 +144,7 @@ func (c *client) isHostOf(r *Room) bool { return !c.isGuest && c.user.ID == r.ow
 // emptyTimer fires teardown. Callers pass a short duration in tests (AC-5.3)
 // and the real config value (default 30m) in main.
 func NewHub(d *sql.DB, idle time.Duration) *Hub {
-	return &Hub{db: d, rooms: map[string]*Room{}, guests: map[string]*GuestSession{}, idle: idle}
+	return &Hub{db: d, rooms: map[string]*Room{}, tokens: map[string]*Room{}, guests: map[string]*GuestSession{}, idle: idle}
 }
 
 // randHex returns n crypto-random bytes as hex — the same generator behind
@@ -252,6 +253,14 @@ func (h *Hub) Handle(w http.ResponseWriter, req *http.Request) {
 		conn.CloseNow()
 		return
 	}
+	// Admission and insertion are one critical section: two handshakes
+	// racing for the final slot must not both observe len(clients) == 11.
+	// Reject before hello/presence so an over-cap tab never becomes visible.
+	if len(r.clients) >= participantCap {
+		r.mu.Unlock()
+		conn.Close(websocket.StatusPolicyViolation, "room capacity reached")
+		return
+	}
 	if r.emptyTimer != nil {
 		r.emptyTimer.Stop() // any join keeps the room alive (AC-5.3)
 	}
@@ -339,6 +348,19 @@ func (h *Hub) dispatch(r *Room, c *client, m inMsg) {
 		})
 
 	case "start":
+		// A room is permanently scoped to the media selected at creation.
+		// Read the fixed id while holding the room lock so a mismatched start
+		// cannot replace its activity with another ready library item.
+		r.mu.Lock()
+		matchesRoomMedia := m.MediaID == r.mediaID
+		r.mu.Unlock()
+		if !matchesRoomMedia {
+			select {
+			case c.send <- marshal(map[string]any{"type": "error", "body": "media does not match room"}):
+			default:
+			}
+			return
+		}
 		if !h.mediaReady(m.MediaID) {
 			select {
 			case c.send <- marshal(map[string]any{"type": "error", "body": "media not ready"}):

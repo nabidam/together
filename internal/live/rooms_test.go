@@ -107,6 +107,151 @@ func TestCreateRoom_RejectsNonReadyMedia(t *testing.T) {
 	}
 }
 
+func TestCreateRoom_OwnerQuotaFreesAfterTeardown(t *testing.T) {
+	ts, hub, _, alice, _ := newStack(t)
+	ids := make([]string, 0, ownerRoomCap)
+	for i := 0; i < ownerRoomCap; i++ {
+		id, _ := createRoom(t, ts, alice, 1, fmt.Sprintf("Room %d", i))
+		ids = append(ids, id)
+	}
+
+	code, out := post(t, ts.URL, "/api/rooms", alice, `{"mediaId":1,"name":"Overflow"}`)
+	if code != http.StatusTooManyRequests || out["error"] != "room limit reached" {
+		t.Fatalf("eleventh owner room want 429 limit error, got %d %+v", code, out)
+	}
+	hub.mu.Lock()
+	rooms, tokens := len(hub.rooms), len(hub.tokens)
+	hub.mu.Unlock()
+	if rooms != ownerRoomCap || tokens != ownerRoomCap {
+		t.Fatalf("rejected room must not allocate state: rooms=%d tokens=%d", rooms, tokens)
+	}
+
+	if code, _ := doReq(t, "DELETE", ts.URL, "/api/rooms/"+ids[0], alice); code != 200 {
+		t.Fatalf("delete to free quota want 200 got %d", code)
+	}
+	if code, _ := post(t, ts.URL, "/api/rooms", alice, `{"mediaId":1,"name":"Replacement"}`); code != 201 {
+		t.Fatalf("room after teardown should free owner quota, got %d", code)
+	}
+}
+
+func TestCreateRoom_GlobalQuota(t *testing.T) {
+	ts, hub, d, alice, _ := newStack(t)
+	cookies := []string{alice}
+	for i := 1; i < 10; i++ {
+		result, err := d.Exec(`INSERT INTO users (username, pass_hash, salt) VALUES (?, ?, ?)`, fmt.Sprintf("owner%d", i), []byte("hash"), []byte("salt"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		id, err := result.LastInsertId()
+		if err != nil {
+			t.Fatal(err)
+		}
+		token, err := auth.CreateSession(d, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cookies = append(cookies, "session="+token)
+	}
+	for _, cookie := range cookies {
+		for i := 0; i < ownerRoomCap; i++ {
+			if code, _ := post(t, ts.URL, "/api/rooms", cookie, `{"mediaId":1}`); code != 201 {
+				t.Fatalf("room %d for owner want 201 got %d", i, code)
+			}
+		}
+	}
+	code, out := post(t, ts.URL, "/api/rooms", cookies[0], `{"mediaId":1}`)
+	if code != http.StatusTooManyRequests || out["error"] != "room limit reached" {
+		t.Fatalf("101st room want 429 limit error, got %d %+v", code, out)
+	}
+	hub.mu.Lock()
+	rooms, tokens := len(hub.rooms), len(hub.tokens)
+	hub.mu.Unlock()
+	if rooms != roomCap || tokens != roomCap {
+		t.Fatalf("global rejection must not allocate state: rooms=%d tokens=%d", rooms, tokens)
+	}
+}
+
+func TestCreateRoom_ExpiresFromBirthAndForgetsToken(t *testing.T) {
+	ts, hub, _, alice, _ := newStackIdle(t, 50*time.Millisecond)
+	_, token := createRoom(t, ts, alice, 1, "")
+
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		hub.mu.Lock()
+		rooms := len(hub.rooms)
+		hub.mu.Unlock()
+		if rooms == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("never-connected room did not expire")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	deadBody, deadCode := joinRawBody(t, ts.URL, token)
+	unknownBody, unknownCode := joinRawBody(t, ts.URL, "unknown-token")
+	if deadCode != 404 || unknownCode != 404 || deadBody != unknownBody {
+		t.Fatalf("expired and unknown tokens must be indistinguishable: dead=%d %q unknown=%d %q", deadCode, deadBody, unknownCode, unknownBody)
+	}
+}
+
+func TestRoomTokenIndex_LifecycleAndUnknownLookup(t *testing.T) {
+	ts, hub, _, alice, _ := newStack(t)
+	id, oldToken := createRoom(t, ts, alice, 1, "")
+	otherID, _ := createRoom(t, ts, alice, 1, "")
+	rm, ok := hub.roomByToken(oldToken)
+	if !ok || rm.id != id {
+		t.Fatalf("created token missing from index: ok=%v room=%+v", ok, rm)
+	}
+
+	_, out := post(t, ts.URL, "/api/rooms/"+id+"/token", alice, `{}`)
+	newToken, _ := out["joinToken"].(string)
+	if newToken == "" {
+		t.Fatalf("regeneration returned no token: %+v", out)
+	}
+	if _, ok := hub.roomByToken(oldToken); ok {
+		t.Fatal("stale token remained in index after regeneration")
+	}
+	if indexed, ok := hub.roomByToken(newToken); !ok || indexed != rm {
+		t.Fatal("current token missing from index after regeneration")
+	}
+
+	other, ok := hub.getRoom(otherID)
+	if !ok {
+		t.Fatal("second room missing")
+	}
+	rm.mu.Lock()
+	other.mu.Lock()
+	lookup := make(chan bool, 1)
+	go func() {
+		_, ok := hub.roomByToken("does-not-exist")
+		lookup <- ok
+	}()
+	select {
+	case ok := <-lookup:
+		if ok {
+			t.Fatal("unknown token unexpectedly resolved")
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("unknown indexed lookup blocked on an unrelated room mutex")
+	}
+	other.mu.Unlock()
+	rm.mu.Unlock()
+
+	if code, _ := doReq(t, "DELETE", ts.URL, "/api/rooms/"+id, alice); code != 200 {
+		t.Fatalf("teardown want 200 got %d", code)
+	}
+	if _, ok := hub.roomByToken(newToken); ok {
+		t.Fatal("torn-down room token remained in index")
+	}
+	deadBody, deadCode := joinRawBody(t, ts.URL, newToken)
+	unknownBody, unknownCode := joinRawBody(t, ts.URL, "unknown-token")
+	if deadCode != 404 || unknownCode != 404 || deadBody != unknownBody {
+		t.Fatalf("torn-down and unknown tokens must be indistinguishable: dead=%d %q unknown=%d %q", deadCode, deadBody, unknownCode, unknownBody)
+	}
+}
+
 func TestListRooms_Shape(t *testing.T) {
 	ts, _, _, alice, _ := newStack(t)
 	id, _ := createRoom(t, ts, alice, 1, "Movie night")
@@ -553,8 +698,8 @@ func newRoomGateStack(t *testing.T) (ts *httptest.Server, hub *Hub, alice, bob s
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { d.Close() })
-	auth.Seed(d, "alice", "password") // id 1, admin
-	bh, bs := auth.Hash("password")
+	auth.Seed(d, "alice", "correct horse battery staple") // id 1, admin
+	bh, bs := auth.Hash("correct horse battery staple")
 	d.Exec(`INSERT INTO users (username, pass_hash, salt) VALUES ('bob', ?, ?)`, bh, bs)                                   // id 2, member
 	d.Exec(`INSERT INTO media (kind, title, status, file_path, size_bytes) VALUES ('video','Movie A','ready','a.mp4',10)`) // id 1
 	d.Exec(`INSERT INTO media (kind, title, status, file_path, size_bytes) VALUES ('video','Movie B','ready','b.mp4',10)`) // id 2

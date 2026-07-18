@@ -196,7 +196,7 @@ func TestProcess_AudioFixtures(t *testing.T) {
 
 func listedMediaKind(t *testing.T, d *sql.DB, dataDir string) string {
 	t.Helper()
-	if err := auth.Seed(d, "admin", "password"); err != nil {
+	if err := auth.Seed(d, "admin", "correct horse battery staple"); err != nil {
 		t.Fatal(err)
 	}
 	mux := http.NewServeMux()
@@ -204,7 +204,7 @@ func listedMediaKind(t *testing.T, d *sql.DB, dataDir string) string {
 	accountGate := func(next http.HandlerFunc) http.HandlerFunc { return auth.Require(d, false, next) }
 	ServeRoutes(mux, d, dataDir, accountGate)
 
-	login := httptest.NewRequest(http.MethodPost, "/api/login", strings.NewReader(`{"username":"admin","password":"password"}`))
+	login := httptest.NewRequest(http.MethodPost, "/api/login", strings.NewReader(`{"username":"admin","password":"correct horse battery staple"}`))
 	login.Header.Set("Content-Type", "application/json")
 	loginResponse := httptest.NewRecorder()
 	mux.ServeHTTP(loginResponse, login)

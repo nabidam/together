@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"time"
+	"unicode/utf8"
 
 	"golang.org/x/crypto/argon2"
 )
@@ -19,9 +20,18 @@ type User struct {
 
 var ErrBadLogin = errors.New("invalid username or password")
 
+// ErrSeedCredentials deliberately contains no supplied credential values.
+var ErrSeedCredentials = errors.New("strong administrator credentials required")
+
 // argon2id uses 64 MB per invocation; unbounded concurrent logins could OOM the
 // 2 GB box (systemd MemoryMax=1200M). Cap concurrent hashes at 2.
 var hashSem = make(chan struct{}, 2)
+
+// dummyHash makes unknown-user login attempts perform the same one Argon2id
+// verification as a wrong password for an existing account.
+var dummyHash, dummySalt = Hash("invalid password")
+
+var verifyPassword = Verify
 
 func idKey(pw string, salt []byte) []byte {
 	hashSem <- struct{}{}
@@ -42,14 +52,18 @@ func Verify(pw string, hash, salt []byte) bool {
 // GC drops expired sessions. Called once at boot; the table stays tiny at ≤10 users.
 func GC(d *sql.DB) { d.Exec(`DELETE FROM sessions WHERE expires_at <= unixepoch()`) }
 
-// Seed creates an admin user if the users table is empty.
+// Seed creates an admin user if the users table is empty. First boot requires
+// a username and a password of at least 12 Unicode code points.
 func Seed(d *sql.DB, user, pass string) error {
 	var n int
 	if err := d.QueryRow(`SELECT count(*) FROM users`).Scan(&n); err != nil {
 		return err
 	}
-	if n > 0 || user == "" {
+	if n > 0 {
 		return nil
+	}
+	if user == "" || utf8.RuneCountInString(pass) < 12 {
+		return ErrSeedCredentials
 	}
 	h, s := Hash(pass)
 	_, err := d.Exec(`INSERT INTO users (username, pass_hash, salt, role) VALUES (?,?,?, 'admin')`, user, h, s)
@@ -61,7 +75,11 @@ func Login(d *sql.DB, user, pass string) (User, error) {
 	var h, s []byte
 	err := d.QueryRow(`SELECT id, username, role, pass_hash, salt FROM users WHERE username=?`, user).
 		Scan(&u.ID, &u.Username, &u.Role, &h, &s)
-	if err != nil || !Verify(pass, h, s) {
+	if err != nil {
+		verifyPassword(pass, dummyHash, dummySalt)
+		return User{}, ErrBadLogin
+	}
+	if !verifyPassword(pass, h, s) {
 		return User{}, ErrBadLogin
 	}
 	return u, nil

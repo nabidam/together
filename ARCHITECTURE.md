@@ -109,6 +109,7 @@ Hub
   mu        sync.Mutex                  // guards rooms map + guestSessions map
   rooms     map[roomID]*Room
   guests    map[guestCookieToken]*GuestSession
+  tokens    map[joinToken]*Room          // current token only; lookup avoids room scans
 
 Room                                    // all fields guarded by Room.mu
   id          string                    // opaque, crypto-random 16 hex chars
@@ -133,7 +134,7 @@ client (per WS connection)
   name, status                          // status: downloading|file_ready|in_sync (client-reported)
 ```
 
-Constraints enforced at the boundary: guest name 1–32 chars after control-char strip; ≤12 participants per room; suffixing checked against currently-connected names only; a reconnecting guestID keeps its name verbatim.
+Constraints enforced at the boundary: guest name 1–32 chars after control-char strip; ≤12 live WebSocket clients per room (admitted under `Room.mu`); ≤10 live rooms per owner and ≤100 process-wide; suffixing checked against currently-connected names only; a reconnecting guestID keeps its name verbatim. New rooms arm their empty timer immediately, so a never-connected room expires too.
 
 ## 4. API contract
 
@@ -143,8 +144,8 @@ All JSON. Error body shape everywhere: `{"error": "human-readable message"}`. Au
 
 | Method & path | Req → Resp | Codes | Auth |
 |---|---|---|---|
-| POST `/api/login` | `{username,password}` → `{id,username,role}` + session cookie | 200, 401 | none |
-| POST `/api/register` | `{code,username,password}` → same as login | 200, 400 (bad code/name — code not burned), 409 taken | none |
+| POST `/api/login` | `{username,password}` → `{id,username,role}` + session cookie | 200, uniform 401, 429 + integer `Retry-After` | none |
+| POST `/api/register` | `{code,username,password}` → same as login | 200, 400 (bad code/name — code not burned), 409 taken, 429 + integer `Retry-After` | none |
 | POST `/api/logout` | — → `{}` , clears cookie | 200 | acct |
 | GET `/api/me` | → `{id,username,role}` | 200, 401 | acct |
 | POST `/api/admin/invites` | `{}` → `{code}` | 200 | admin |
@@ -155,11 +156,11 @@ All JSON. Error body shape everywhere: `{"error": "human-readable message"}`. Au
 | Method & path | Req → Resp | Codes | Auth |
 |---|---|---|---|
 | GET `/api/media` | → `[{id,kind,title,status,sizeBytes,duration,subtitles:[{id,label}]}]` | 200 | acct |
-| POST `/api/admin/media` | `{title,origName,sizeBytes}` → `{id}` (upload session) | 200 | admin |
-| GET `/api/admin/media/{id}/blob` | → `{offset}` (resume point) | 200, 404 | admin |
-| PATCH `/api/admin/media/{id}/blob` | 8 MB chunk at `Upload-Offset` header → `{offset}` | 200, 409 offset mismatch | admin |
-| POST `/api/admin/media/{id}/finish` | `{}` → `{}` (enqueues job) | 200 | admin |
-| POST `/api/admin/media/{id}/subtitle` | multipart `.srt` + label → `{id}` | 200, 400 | admin |
+| POST `/api/admin/media` | `{title,origName,sizeBytes}` → `{id}` (upload session); JSON ≤4 KiB and positive `sizeBytes` ≤ configured maximum | 200, 400, 413 | admin |
+| GET `/api/admin/media/{id}/blob` | → `{size}` (resume point) | 200 | admin |
+| PATCH `/api/admin/media/{id}/blob?offset=N` | raw chunk ≤8 MiB with required `Upload-Length` equal to the declared total → `{size}` | 200, 400, 409, 413 | admin |
+| POST `/api/admin/media/{id}/finish` | exact declared byte count → job enqueued | 202, 409 | admin |
+| POST `/api/admin/media/{id}/subtitle` | raw `.srt` body ≤10 MiB + optional `label` → `{id}` | 201, 413 | admin |
 | DELETE `/api/admin/media/{id}` | → `{}` (row, files, subs, jobs) | 200, 404 | admin |
 
 Pipeline decision tree at `finish` (one worker, `nice -n 19`): probe → **no video stream** ⇒ audio branch: aac/m4a/mp3 → move as-is, else `-c:a aac` into `.m4a`; **video** ⇒ V1 tree unchanged (mp4/h264/aac move; mkv/h264/aac remux; h264+other-audio audio-only transcode; else libx264). `kind` set from the probe. No libx264 path for audio, ever.
@@ -169,7 +170,7 @@ Pipeline decision tree at `finish` (one worker, `nice -n 19`): probe → **no vi
 | Method & path | Req → Resp | Codes | Auth |
 |---|---|---|---|
 | GET `/api/rooms` | → `[{id,name,mediaId,mediaTitle,kind,participants}]` (live rooms from hub) | 200 | acct |
-| POST `/api/rooms` | `{mediaId, name?}` → `{id, joinToken}`; name defaults to media title; media must be `ready`; creates room **and** starts its watch activity | 201, 400, 404 media | acct |
+| POST `/api/rooms` | `{mediaId, name?}` → `{id, joinToken}`; name defaults to media title; media must be `ready`; creates room **and** starts its watch activity | 201, 400, 404 media, 429 room limit | acct |
 | DELETE `/api/rooms/{id}` | → `{}` — immediate teardown, broadcasts `room_closed` | 200, 403 not host, 404 | acct (host check inside) |
 | GET `/api/rooms/{id}/token` | → `{joinToken}` — retrieves the current invite for a returning host | 200, 403 not host, 404 | acct (host) |
 | POST `/api/rooms/{id}/token` | `{}` → `{joinToken}` — regenerate; old token dead for new joins, connected guests persist | 200, 403, 404 | acct (host) |
@@ -177,7 +178,7 @@ Pipeline decision tree at `finish` (one worker, `nice -n 19`): probe → **no vi
 | GET `/api/rooms/{id}/meta` | → `{name, kind, media:{id,title,sizeBytes,duration}, subtitles:[{id,label}]}` — serves the acquisition panel's size check (FR-11); S6's pre-join room name comes from the peek route below | 200, 404 | room |
 | GET `/api/rooms/join/{token}` | → `{roomName}` (pre-join peek for S6 header) | 200, 404 | none |
 
-Room ids and join tokens come from the same crypto-random generator as session tokens. Unguessability is the rate-limiter (SPEC §9.11); no other throttling.
+Room ids and join tokens come from the same crypto-random generator as session tokens. Current tokens are indexed under `Hub.mu`; create, regeneration, and teardown update the index, while stale and unknown probes keep the same 404 body. Unguessability protects the public token surface; account-entry throttling is separate.
 
 ### 4.4 Media bytes (auth widened from V1 `acct` to `room`)
 
@@ -199,7 +200,7 @@ JSON frames. Deltas from V1 marked ●.
 |---|---|---|
 | `chat` | `{body}` | ≤2000 chars, non-empty |
 | `intent` | `{action:"play"\|"pause"\|"seek", position?}` | any participant; applied via `watch.Apply` under room mutex |
-| `start` / `end` | `{mediaId}` / `{}` | unchanged V1 semantics (room creation already starts the activity; kept for restart) |
+| `start` / `end` | `{mediaId}` / `{}` | `start.mediaId` must equal the room's immutable `mediaID`; mismatch is a recoverable `error` with unchanged activity. Room creation already starts the activity; frames remain for restart. |
 | `ping` | `{t}` | every 10 s |
 | ● `status` | `{state:"downloading"\|"file_ready"\|"in_sync"}` | presence-only; never enters the `intent`/`watch.go` path |
 
@@ -219,7 +220,7 @@ JSON frames. Deltas from V1 marked ●.
 
 - One goroutine-safe hub; per-room mutex serializes everything inside a room (V1 discipline, kept).
 - **Per-room `recover()`** in every hub goroutine that touches a room — load-bearing (NFR-7): with checkpointing deleted, a panicking room must log, tear itself down, and leave the process serving.
-- Empty detection: zero open WS connections (a cookie'd-but-disconnected guest does not keep it warm). Last close → `emptyTimer.Reset(idle)`; any join → `Stop()`; fire → teardown.
+- Empty detection: zero open WS connections (a cookie'd-but-disconnected guest does not keep it warm). Creation arms `emptyTimer`; first and subsequent joins stop it; last close resets it; fire → teardown.
 - Teardown (host end, timer fire, or panic path — one code path, under hub lock): broadcast `room_closed` → close sockets → cancel timer → delete room from map → drop its guest sessions → token forgotten. Nothing touches SQLite.
 - Server crash: rooms/chat/guests vanish (accepted, NFR-5); boot reclaims stuck `running` jobs (V1 behavior, kept) and runs the §3.1 cutover idempotently.
 
@@ -277,13 +278,13 @@ Module direction: `cmd/server` → {auth, live, media, db}; `live` → {auth (se
 
 ## 8. Error handling strategy
 
-- **HTTP:** correct status + `{"error": msg}`; never a stack trace. 401 → SPA routes to S1 (except `#/join/*`). Join-token probes get an undifferentiated 404 (no live-room oracle).
+- **HTTP:** correct status + `{"error": msg}`; never a stack trace. 401 → SPA routes to S1 (except `#/join/*`). Join-token probes get an undifferentiated 404 (no live-room oracle). Throttled login/register uses JSON 429 plus integer-seconds `Retry-After`; room quota is JSON 429; bounded upload bodies use 413 and offset/total/incomplete uploads use 409.
 - **WS:** malformed frame → `error` frame, connection kept; oversize/invalid chat or name → refused with `error`; socket write failure → drop that client only, presence updates.
 - **Room panic:** per-room recover → log with room id → teardown that room → process lives (NFR-7).
 - **Client sync:** drift bands per FR-18; backward `serverTime` clamped in both `PositionAt` implementations; reconnect = exponential backoff (1 s… cap 30 s) then full `hello` restore — no client-side event queue.
 - **Acquisition:** size mismatch is an inline blocked state (never a modal, never auto-stream); streaming happens only through M4 confirmation.
 - **Pipeline:** job failure → `media.status='failed'` + `error` shown in S7; boot reclaims `running` jobs; delete is the recovery path.
-- **Uploads:** offset mismatch → 409 with server offset; client resumes from it (localStorage continuation keyed on filename+size).
+- **Uploads:** create JSON is capped at 4 KiB; PATCH bodies at 8 MiB; subtitle bodies at 10 MiB. New uploads declare a positive total at creation and every PATCH supplies matching `Upload-Length`; legacy uploading rows establish it exactly once. Offset/total/incomplete errors are 409 and oversized bodies are 413; client resumes from `{size}` (localStorage continuation keyed on filename+size).
 
 ## 9. Configuration strategy
 
@@ -293,10 +294,11 @@ Env vars only, read once in `main` (no config files, no flags, no Viper):
 |---|---|---|
 | `TOGETHER_ADDR` | `:8080` | listen address |
 | `TOGETHER_DATA` | `./data` | SQLite file + media dirs |
-| `ADMIN_USER` / `ADMIN_PASS` | — | seed admin, first boot only |
+| `ADMIN_USER` / `ADMIN_PASS` | — | seed admin only when no users exist; username required and password must contain ≥12 Unicode code points |
 | `TOGETHER_ROOM_IDLE` | `30m` | empty-room close delay (Go duration; overridable for tests — AC-5.3) |
+| `TOGETHER_MAX_UPLOAD_BYTES` | `21474836480` (20 GiB) | positive maximum declared size for new/resumed uploads |
 
-Compile-time constants (not config): room cap 12, chat ring 200, chat max 2000 chars, guest name max 32, room name max 64, chunk size 8 MB, ping 10 s, drift bands 1 s / 0.15 s, backoff cap 30 s.
+Compile-time constants (not config): live-room cap 12, owner room cap 10, global room cap 100, auth throttle key cap 10,000 with 15-minute idle eviction, chat ring 200, chat max 2000 chars, guest name max 32, room name max 64, upload JSON 4 KiB, chunk size 8 MiB, subtitle size 10 MiB, ping 10 s, drift bands 1 s / 0.15 s, backoff cap 30 s. Failed login is burst 5/refill 12 s; failed registration burst 10/refill 6 s. Limiter identity is the socket peer IP, except a loopback peer may supply the first syntactically valid `X-Forwarded-For` IP.
 
 ## 10. Kernel-journey traceability (UX F1 → contract)
 
@@ -315,3 +317,7 @@ Compile-time constants (not config): room cap 12, chat ring 200, chat max 2000 c
 | 11. Host ends room | `DELETE /api/rooms/{id}` (or WS-adjacent host UI → same endpoint) → teardown → `room_closed` broadcast → V1 view; library/accounts persist (nothing to do — they were never room state) |
 
 Every F2–F4 step reduces to the same contract rows (F2: steps 5–6; F3: identical with `kind=audio`; F4: `isHost` recomputed live on rejoin, no transfer endpoint exists by design).
+
+## 11. Decision log
+
+- **2026-07-18 — Security boundaries stay process-local and explicit.** Authentication throttles, room quotas, token indexing, and upload byte limits are enforced at their server boundaries without new runtime dependencies. `scripts/security-e2e.sh` drives the built production binary using only self-created disposable state; it verifies the complete kernel journey, restart durability, and cleanup on an injected failure. Caddy is trusted for `X-Forwarded-For` only because it is loopback-facing.

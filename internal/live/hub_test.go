@@ -43,8 +43,8 @@ func newStackIdle(t *testing.T, idle time.Duration) (*httptest.Server, *Hub, *sq
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { d.Close() })
-	auth.Seed(d, "alice", "password") // id 1, admin
-	bh, bs := auth.Hash("password")
+	auth.Seed(d, "alice", "correct horse battery staple") // id 1, admin
+	bh, bs := auth.Hash("correct horse battery staple")
 	d.Exec(`INSERT INTO users (username, pass_hash, salt) VALUES ('bob', ?, ?)`, bh, bs) // id 2, member
 	d.Exec(`INSERT INTO media (kind, title, status, file_path, size_bytes) VALUES ('video','The Movie','ready','x.mp4',10)`)
 
@@ -172,6 +172,67 @@ func TestActivitySync(t *testing.T) {
 	}
 }
 
+func TestWSStart_RejectsMediaOutsideRoomScope(t *testing.T) {
+	ts, hub, d, alice, _ := newStack(t)
+	d.Exec(`INSERT INTO media (kind, title, status, file_path, size_bytes) VALUES ('video','Other Movie','ready','other.mp4',10)`)
+	room, token := createRoom(t, ts, alice, 1, "")
+	guest := joinAsGuest(t, ts, token, "Casey")
+	c := dial(t, ts, room, guest)
+	read(t, c) // hello
+
+	r, ok := hub.getRoom(room)
+	if !ok {
+		t.Fatal("room disappeared")
+	}
+	r.mu.Lock()
+	before := *r.watch
+	r.mu.Unlock()
+
+	send(t, c, frame{"type": "start", "mediaId": 2})
+	if f := waitFor(t, c, "error"); f["body"] != "media does not match room" {
+		t.Fatalf("wrong fixed-media error: %+v", f)
+	}
+
+	r.mu.Lock()
+	after := *r.watch
+	r.mu.Unlock()
+	if after.MediaID != before.MediaID || after.Version != before.Version || after.Position != before.Position {
+		t.Fatalf("mismatched start changed activity: before=%+v after=%+v", before, after)
+	}
+}
+
+func TestWSStart_RoomMediaAndControlsRemainAvailable(t *testing.T) {
+	ts, _, _, alice, bob := newStack(t)
+	room, _ := createRoom(t, ts, alice, 1, "")
+	a := dial(t, ts, room, alice)
+	read(t, a) // hello
+	b := dial(t, ts, room, bob)
+	read(t, b) // hello
+	waitFor(t, a, "presence")
+
+	send(t, b, frame{"type": "start", "mediaId": 1})
+	if f := waitFor(t, a, "activity"); f["activity"].(map[string]any)["state"].(map[string]any)["mediaId"] != float64(1) {
+		t.Fatalf("room-media start did not broadcast its activity: %+v", f)
+	}
+
+	send(t, b, frame{"type": "intent", "action": "play"})
+	if f := waitFor(t, a, "activity"); f["activity"].(map[string]any)["state"].(map[string]any)["paused"] != false {
+		t.Fatalf("play changed after fixed-media guard: %+v", f)
+	}
+	send(t, b, frame{"type": "intent", "action": "seek", "position": 42})
+	if f := waitFor(t, a, "activity"); f["activity"].(map[string]any)["state"].(map[string]any)["position"] != float64(42) {
+		t.Fatalf("seek changed after fixed-media guard: %+v", f)
+	}
+	send(t, b, frame{"type": "intent", "action": "pause"})
+	if f := waitFor(t, a, "activity"); f["activity"].(map[string]any)["state"].(map[string]any)["paused"] != true {
+		t.Fatalf("pause changed after fixed-media guard: %+v", f)
+	}
+	send(t, b, frame{"type": "end"})
+	if f := waitFor(t, a, "activity"); f["activity"] != nil {
+		t.Fatalf("end changed after fixed-media guard: %+v", f)
+	}
+}
+
 func TestHelloCarriesActivityForLateJoiner(t *testing.T) {
 	ts, _, _, alice, bob := newStack(t)
 	room, _ := createRoom(t, ts, alice, 1, "")
@@ -192,6 +253,115 @@ func TestWSRejectsUnknownRoom(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("dial to a non-existent room should fail the upgrade")
+	}
+}
+
+func TestWSCapacity_RejectsThirteenthBeforePresence(t *testing.T) {
+	ts, hub, _, alice, _ := newStack(t)
+	room, token := createRoom(t, ts, alice, 1, "")
+
+	// A guest identity exists before its socket opens, but it must not consume
+	// a live slot until it actually connects.
+	guest := joinAsGuest(t, ts, token, "Casey")
+	connections := make([]*websocket.Conn, 0, participantCap)
+	for i := 0; i < participantCap-1; i++ {
+		connections = append(connections, dial(t, ts, room, alice))
+		read(t, connections[len(connections)-1]) // hello
+	}
+	connections = append(connections, dial(t, ts, room, guest))
+	guestHello := read(t, connections[len(connections)-1])
+	if guestHello["you"].(map[string]any)["isGuest"] != true {
+		t.Fatalf("guest connection must enter presence as a guest: %+v", guestHello)
+	}
+
+	rm, ok := hub.getRoom(room)
+	if !ok {
+		t.Fatal("room disappeared")
+	}
+	rm.mu.Lock()
+	if got := len(rm.clients); got != participantCap {
+		rm.mu.Unlock()
+		t.Fatalf("want %d live clients, got %d", participantCap, got)
+	}
+	rm.mu.Unlock()
+
+	// The HTTP upgrade succeeds, then the server immediately sends the close
+	// control frame. No hello or presence frame may precede it.
+	overflow := dial(t, ts, room, alice)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_, _, err := overflow.Read(ctx)
+	if got := websocket.CloseStatus(err); got != websocket.StatusPolicyViolation {
+		t.Fatalf("13th connection close status = %v, want policy violation; err=%v", got, err)
+	}
+
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	if got := len(rm.clients); got != participantCap {
+		t.Fatalf("overflow connection entered Room.clients: got %d", got)
+	}
+}
+
+func TestWSCapacity_RacingForLastSlotAdmitsOne(t *testing.T) {
+	ts, hub, _, alice, _ := newStack(t)
+	room, _ := createRoom(t, ts, alice, 1, "")
+	for i := 0; i < participantCap-1; i++ {
+		c := dial(t, ts, room, alice)
+		read(t, c) // hello
+	}
+
+	type result struct {
+		conn *websocket.Conn
+		err  error
+	}
+	start := make(chan struct{})
+	results := make(chan result, 2)
+	url := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws/" + room
+	for range 2 {
+		go func() {
+			<-start
+			conn, _, err := websocket.Dial(context.Background(), url, &websocket.DialOptions{
+				HTTPHeader: http.Header{"Cookie": []string{alice}},
+			})
+			results <- result{conn: conn, err: err}
+		}()
+	}
+	close(start)
+
+	admitted := 0
+	for range 2 {
+		result := <-results
+		if result.err != nil {
+			t.Fatalf("racing handshake failed before admission: %v", result.err)
+		}
+		t.Cleanup(func() { result.conn.CloseNow() })
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		_, data, err := result.conn.Read(ctx)
+		cancel()
+		if err == nil {
+			var f frame
+			if json.Unmarshal(data, &f) != nil || f["type"] != "hello" {
+				t.Fatalf("admitted connection must receive hello, got %s", data)
+			}
+			admitted++
+			continue
+		}
+		if got := websocket.CloseStatus(err); got != websocket.StatusPolicyViolation {
+			t.Fatalf("rejected racing connection close status = %v, want policy violation; err=%v", got, err)
+		}
+	}
+	if admitted != 1 {
+		t.Fatalf("racing final-slot handshakes admitted %d connections, want 1", admitted)
+	}
+
+	rm, ok := hub.getRoom(room)
+	if !ok {
+		t.Fatal("room disappeared")
+	}
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	if got := len(rm.clients); got != participantCap {
+		t.Fatalf("want %d live clients after race, got %d", participantCap, got)
 	}
 }
 

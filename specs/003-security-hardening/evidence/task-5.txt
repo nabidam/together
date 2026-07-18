@@ -1,0 +1,23 @@
+Task 5 verification evidence
+
+Focused contract exercise:
+  go test -race ./internal/live -run 'TestWSStart|TestActivitySync' -count=1
+  ok   together/internal/live  1.656s
+
+The WebSocket test drives a guest in a media-1 room to send start{mediaId:2}
+for a ready media row, observes the recoverable "media does not match room"
+error frame, and verifies media ID, version, and position do not change. It
+also drives room-media start, play, seek, pause, and end, asserting each
+activity broadcast remains available.
+
+Full verification:
+  ./scripts/verify.sh
+  ?    together/cmd/server [no test files]
+  ok   together/internal/auth (cached)
+  ok   together/internal/db (cached)
+  ok   together/internal/live 8.698s
+  ok   together/internal/media (cached)
+  found 0 vulnerabilities
+  ℹ pass 12
+  ℹ fail 0
+  ✓ built in 7.14s

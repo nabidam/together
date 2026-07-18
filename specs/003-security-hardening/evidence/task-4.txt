@@ -1,0 +1,43 @@
+Task 4 verification
+
+Command:
+go test -race ./internal/live -run 'Test(CreateRoom_(OwnerQuotaFreesAfterTeardown|GlobalQuota|ExpiresFromBirthAndForgetsToken)|RoomTokenIndex_LifecycleAndUnknownLookup)' -count=3
+
+Output:
+ok  	together/internal/live	4.166s
+
+Command:
+./scripts/verify.sh
+
+Last output:
+?   	together/cmd/server	[no test files]
+ok  	together/internal/auth	(cached)
+ok  	together/internal/db	(cached)
+ok  	together/internal/live	8.724s
+ok  	together/internal/media	(cached)
+
+added 144 packages, and audited 145 packages in 4s
+
+found 0 vulnerabilities
+\u2714 checkFileSize accepts a file whose bytes match room media
+\u2714 checkFileSize reports the selected and expected byte counts on mismatch
+\u2714 replaceObjectURL revokes the previous blob URL before creating the replacement
+\u2714 paused state does not advance
+\u2714 playing state advances with rate
+\u2714 big drift \u2192 hard seek
+\u2714 small drift behind \u2192 speed up
+\u2714 small drift ahead \u2192 slow down
+\u2714 in sync at nudged rate \u2192 reset rate
+\u2714 in sync at normal rate \u2192 nothing
+\u2714 backward server clock does not rewind
+\u2714 connect reports connection changes and forwards V2 frames
+\u2139 tests 12
+\u2139 pass 12
+\u2139 fail 0
+
+> together-web@0.0.0 build
+> vite build
+
+vite v6.4.3 building for production...
+\u2713 4076 modules transformed.
+\u2713 built in 7.38s

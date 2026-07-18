@@ -28,12 +28,13 @@ sudo useradd --system --gid together --home /var/lib/together --create-home --sh
 sudo install -d -o together -g together -m 0750 /var/lib/together
 ```
 
-Create `/etc/together.env` with a first-boot admin password. The values are read only when the account is initially seeded; keep the file private afterward.
+Create `/etc/together.env` with first-boot administrator credentials. A new database refuses to start unless `ADMIN_USER` is present and `ADMIN_PASS` has at least 12 Unicode code points. Once any user exists, seed values are ignored; keep the file private afterward. Set an upload ceiling that leaves adequate disk headroom (the default is 20 GiB per upload).
 
 ```sh
 sudo sh -c 'cat > /etc/together.env <<EOF
 ADMIN_USER=admin
 ADMIN_PASS=replace-with-a-unique-long-password
+TOGETHER_MAX_UPLOAD_BYTES=21474836480
 EOF'
 sudo chown root:together /etc/together.env
 sudo chmod 0640 /etc/together.env
@@ -61,6 +62,12 @@ sudo systemctl reload caddy
 ```
 
 Caddy obtains and renews HTTPS certificates automatically when public DNS for the domain points at the server and ports 80 and 443 are reachable. Caddy proxies WebSockets without extra configuration. Leave Together bound to `127.0.0.1:8080`; expose only Caddy publicly.
+
+Together uses the socket peer IP for login and registration rate limits. It accepts the first valid `X-Forwarded-For` value only from a loopback peer, so this loopback-only Caddy topology is required; do not put an untrusted local proxy in front of the application.
+
+## Upload capacity
+
+`TOGETHER_MAX_UPLOAD_BYTES` is a positive byte count enforced for new and resumed uploads, with a default of `21474836480` (20 GiB). It is a per-upload boundary, not a disk quota: reserve space for both the original and processed media. The server also rejects creation JSON larger than 4 KiB, upload chunks over 8 MiB, and subtitle bodies over 10 MiB. Clients must declare the total at creation and send the same `Upload-Length` on each resumable chunk; a `413` means a request body is too large, while `409` means offset, declared total, or final size does not match.
 
 ## Firewall
 
@@ -127,6 +134,6 @@ sudo systemctl start together
 ## Troubleshooting
 
 - `ffprobe` or `ffmpeg` errors: install the `ffmpeg` package and check `journalctl -u together`.
-- The service will not start: verify `/etc/together.env` permissions, ownership, and `TOGETHER_DATA` write access.
+- The service will not start on first boot: verify `/etc/together.env` permissions, ownership, `TOGETHER_DATA` write access, and that `ADMIN_USER` plus a 12-code-point-or-longer `ADMIN_PASS` are present. Check `TOGETHER_MAX_UPLOAD_BYTES` is a positive integer if it is set.
 - HTTPS does not issue: confirm public DNS and that ports 80/443 reach Caddy.
 - A room disappears after restart: expected; create a new room after the server returns.

@@ -8,6 +8,7 @@ async function uploadChunks(id, file, onProgress) {
   for (let off = start; off < file.size; off += CHUNK) {
     const res = await fetch(`/api/admin/media/${id}/blob?offset=${off}`, {
       method: "PATCH",
+      headers: { "Upload-Length": String(file.size) },
       body: file.slice(off, off + CHUNK),
     });
     if (!res.ok) {
@@ -48,7 +49,7 @@ export async function uploadMedia({ kind, title, file, subtitle, onProgress }) {
   }
 
   if (!id) {
-    ({ id } = await post("/api/admin/media", { kind, title, origName: file.name }));
+    ({ id } = await post("/api/admin/media", { kind, title, origName: file.name, sizeBytes: file.size }));
     localStorage.setItem(key, id);
     await uploadChunks(id, file, onProgress);
   }

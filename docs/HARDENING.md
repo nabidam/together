@@ -8,11 +8,12 @@ Use this checklist before making an instance public. It complements, rather than
 - Permit inbound 80/443 and SSH only; do not expose 8080.
 - Replace the example Caddy hostname before loading the configuration.
 - Keep Caddy and the operating system patched. Verify certificate renewal with `systemctl status caddy` and Caddy logs.
+- Together trusts `X-Forwarded-For` only from a loopback peer. Keep the app bound to loopback and do not put an untrusted local proxy in front of it; direct non-loopback clients cannot choose their rate-limit identity.
 
 ## Process isolation and secrets
 
 - Use the supplied `together` system account; never run the service as root.
-- Keep `/etc/together.env` owned by root and readable only by the `together` group (`0640`); use a unique, long first-admin password.
+- Keep `/etc/together.env` owned by root and readable only by the `together` group (`0640`). On a new database, `ADMIN_USER` and an `ADMIN_PASS` of at least 12 Unicode code points are required; after the first user exists, these seed values are ignored.
 - Keep `/var/lib/together` owned by `together:together` and not world-readable. It contains SQLite sessions and uploaded media.
 - Retain the supplied systemd hardening settings (`NoNewPrivileges`, read-only system paths, private `/tmp`, protected home, and explicit writable data path).
 
@@ -21,7 +22,10 @@ Use this checklist before making an instance public. It complements, rather than
 - Treat invite links as credentials. Regenerate a room link if it was shared too widely.
 - Accounts are invite-code gated, but this is not a substitute for network security or strong admin passwords.
 - Upload processing invokes ffmpeg only at ingest time. Keep ffmpeg patched and restrict server access to trusted administrators.
-- Monitor disk space: uploaded and processed media consume local storage. Delete media that is no longer needed.
+- `TOGETHER_MAX_UPLOAD_BYTES` limits each new or resumed upload's declared total; it defaults to 20 GiB. Creation JSON, individual upload chunks, and subtitle bodies are also capped at 4 KiB, 8 MiB, and 10 MiB respectively. Set a lower limit in `/etc/together.env` when disk capacity requires it.
+- Monitor disk space: uploaded and processed media consume local storage. The per-upload limit is not a filesystem-wide quota, so reserve headroom and delete media that is no longer needed.
+- Login failures are rate-limited per trusted client IP (five immediate failures, then one every 12 seconds). Repeated registration failures are limited separately (ten immediate failures, then one every six seconds). A `429` response includes `Retry-After`.
+- Rooms are ephemeral and bounded: 12 live WebSocket clients per room, 10 live rooms per owner, and 100 live rooms process-wide. Treat a room link as a credential and regenerate it if exposed.
 
 ## Backups and incident response
 

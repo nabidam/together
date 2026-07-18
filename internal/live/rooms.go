@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
 	"together/internal/auth"
@@ -16,6 +17,8 @@ const (
 	roomNameMax    = 64
 	guestNameMax   = 32
 	participantCap = 12
+	ownerRoomCap   = 10
+	roomCap        = 100
 )
 
 // GuestSession is a hub-level (not per-connection) identity minted by
@@ -186,21 +189,9 @@ func sanitizeGuestName(raw string) (string, error) {
 // never existed — there is no oracle distinguishing the two (§8, no-oracle).
 func (h *Hub) roomByToken(token string) (*Room, bool) {
 	h.mu.Lock()
-	rooms := make([]*Room, 0, len(h.rooms))
-	for _, rm := range h.rooms {
-		rooms = append(rooms, rm)
-	}
+	rm, ok := h.tokens[token]
 	h.mu.Unlock()
-
-	for _, rm := range rooms {
-		rm.mu.Lock()
-		match := rm.joinToken == token
-		rm.mu.Unlock()
-		if match {
-			return rm, true
-		}
-	}
-	return nil, false
+	return rm, ok
 }
 
 // suffixNameLocked appends " (2)", " (3)"... on collision with a currently
@@ -263,6 +254,10 @@ func (h *Hub) joinRoom(w http.ResponseWriter, r *http.Request) {
 
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.rooms[rm.id] != rm {
+		writeErr(w, 404, "room not found")
+		return
+	}
 
 	guestCount := 0
 	for _, gs := range h.guests {
@@ -395,11 +390,25 @@ func (h *Hub) createRoom(w http.ResponseWriter, r *http.Request) {
 		name = title
 	}
 
+	h.mu.Lock()
+	ownerID := auth.From(r).ID
+	ownerRooms := 0
+	for _, existing := range h.rooms {
+		if existing.ownerID == ownerID {
+			ownerRooms++
+		}
+	}
+	if ownerRooms >= ownerRoomCap || len(h.rooms) >= roomCap {
+		h.mu.Unlock()
+		writeErr(w, http.StatusTooManyRequests, "room limit reached")
+		return
+	}
+
 	st := NewWatch(in.MediaID, nowMs())
 	rm := &Room{
 		id:         randHex(8),
 		name:       name,
-		ownerID:    auth.From(r).ID,
+		ownerID:    ownerID,
 		mediaID:    in.MediaID,
 		mediaTitle: title,
 		kind:       kind,
@@ -408,9 +417,11 @@ func (h *Hub) createRoom(w http.ResponseWriter, r *http.Request) {
 		clients:    map[*client]bool{},
 		chat:       []ChatMsg{},
 	}
-
-	h.mu.Lock()
+	// Creation is an empty state too: a room with no first connection must
+	// expire instead of reserving capacity indefinitely.
+	rm.emptyTimer = time.AfterFunc(h.idle, func() { h.fireEmpty(rm) })
 	h.rooms[rm.id] = rm
+	h.tokens[rm.joinToken] = rm
 	h.mu.Unlock()
 
 	writeJSON(w, 201, map[string]any{"id": rm.id, "joinToken": rm.joinToken})
@@ -441,10 +452,20 @@ func (h *Hub) regenToken(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 403, "only the host can regenerate the link")
 		return
 	}
+	h.mu.Lock()
+	if h.rooms[rm.id] != rm {
+		h.mu.Unlock()
+		writeErr(w, 404, "room not found")
+		return
+	}
 	rm.mu.Lock()
+	old := rm.joinToken
 	rm.joinToken = randHex(16)
 	tok := rm.joinToken
+	delete(h.tokens, old)
+	h.tokens[tok] = rm
 	rm.mu.Unlock()
+	h.mu.Unlock()
 	writeJSON(w, 200, map[string]any{"joinToken": tok})
 }
 
@@ -489,9 +510,13 @@ func (h *Hub) isHost(rm *Room, u auth.User) bool {
 // fire, or a panic while another trigger is mid-teardown, is a no-op on
 // whichever call arrives second.
 func (h *Hub) teardown(rm *Room) {
+	// The hub lock serializes token-index updates with regeneration. Keeping
+	// this order (hub, then room) prevents teardown from resurrecting a token.
+	h.mu.Lock()
 	rm.mu.Lock()
 	if rm.closed {
 		rm.mu.Unlock()
+		h.mu.Unlock()
 		return
 	}
 	rm.closed = true
@@ -504,8 +529,8 @@ func (h *Hub) teardown(rm *Room) {
 	}
 	rm.mu.Unlock()
 
-	h.mu.Lock()
 	delete(h.rooms, rm.id)
+	delete(h.tokens, rm.joinToken)
 	for tok, gs := range h.guests {
 		if gs.roomID == rm.id {
 			delete(h.guests, tok)
