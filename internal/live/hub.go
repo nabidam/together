@@ -252,6 +252,14 @@ func (h *Hub) Handle(w http.ResponseWriter, req *http.Request) {
 		conn.CloseNow()
 		return
 	}
+	// Admission and insertion are one critical section: two handshakes
+	// racing for the final slot must not both observe len(clients) == 11.
+	// Reject before hello/presence so an over-cap tab never becomes visible.
+	if len(r.clients) >= participantCap {
+		r.mu.Unlock()
+		conn.Close(websocket.StatusPolicyViolation, "room capacity reached")
+		return
+	}
 	if r.emptyTimer != nil {
 		r.emptyTimer.Stop() // any join keeps the room alive (AC-5.3)
 	}
