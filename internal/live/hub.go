@@ -22,8 +22,9 @@ import (
 // reading durable media rows at room creation, never for room state.
 type Hub struct {
 	db     *sql.DB
-	mu     sync.Mutex // guards rooms map and guests map
+	mu     sync.Mutex // guards rooms, tokens, and guests maps
 	rooms  map[string]*Room
+	tokens map[string]*Room         // current join token -> room; stale tokens are removed
 	guests map[string]*GuestSession // keyed by the together_guest cookie token
 	idle   time.Duration            // TOGETHER_ROOM_IDLE — empty-room close delay (ARCHITECTURE §9)
 }
@@ -143,7 +144,7 @@ func (c *client) isHostOf(r *Room) bool { return !c.isGuest && c.user.ID == r.ow
 // emptyTimer fires teardown. Callers pass a short duration in tests (AC-5.3)
 // and the real config value (default 30m) in main.
 func NewHub(d *sql.DB, idle time.Duration) *Hub {
-	return &Hub{db: d, rooms: map[string]*Room{}, guests: map[string]*GuestSession{}, idle: idle}
+	return &Hub{db: d, rooms: map[string]*Room{}, tokens: map[string]*Room{}, guests: map[string]*GuestSession{}, idle: idle}
 }
 
 // randHex returns n crypto-random bytes as hex — the same generator behind
