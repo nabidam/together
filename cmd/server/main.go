@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -63,13 +64,17 @@ func main() {
 	if err != nil {
 		log.Fatal("bad TOGETHER_ROOM_IDLE: ", err)
 	}
+	maxUploadBytes, err := strconv.ParseInt(env("TOGETHER_MAX_UPLOAD_BYTES", strconv.FormatInt(media.DefaultMaxUploadBytes, 10)), 10, 64)
+	if err != nil || maxUploadBytes <= 0 {
+		log.Fatal("bad TOGETHER_MAX_UPLOAD_BYTES")
+	}
 	hub := live.NewHub(d, idle)
 
 	mux := http.NewServeMux()
 	// ponytail: SameSite=Lax + HttpOnly suffices behind TLS proxy on private instance
 	auth.Routes(mux, d)
 	hub.Routes(mux)
-	media.UploadRoutes(mux, d, dataDir)
+	media.UploadRoutes(mux, d, dataDir, maxUploadBytes)
 	media.ServeRoutes(mux, d, dataDir, hub.RequireRoomMedia)
 	mux.HandleFunc("GET /ws/{id}", hub.RequireRoom(hub.Handle))
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })
