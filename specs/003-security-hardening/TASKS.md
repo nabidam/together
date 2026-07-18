@@ -272,6 +272,8 @@ gate = 1
 
 **Context pack:** `internal/live/hub.go`, `internal/live/hub_test.go`, `internal/live/watch.go`, PRD FR-10, `ARCHITECTURE.md` §3.2/§4.5. Backend-only.
 
+> **DONE** `c982dc9` — Evidence: `specs/003-security-hardening/evidence/task-5.txt`. `start` now returns a recoverable error unless its media ID matches the room's immutable media ID; mismatches leave activity untouched while matching start and normal controls continue to broadcast activity.
+
 ## Task 6 — Demo Gate 1: authentication and room boundaries
 
 Walk the first two chunks through the production binary before upload work begins.
