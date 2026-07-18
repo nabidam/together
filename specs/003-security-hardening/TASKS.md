@@ -166,6 +166,8 @@ gate = 1
 
 **Context pack:** `internal/live/hub.go`, `internal/live/hub_test.go`, `internal/live/rooms.go`, `internal/live/rooms_test.go`, PRD room sections, `ARCHITECTURE.md` §3.2/§4.5/§5. Backend-only.
 
+> **DONE** `adc01ff` — Evidence: `specs/003-security-hardening/evidence/task-3.txt`. `go test -race ./internal/live -run 'TestWSCapacity' -count=3` proves a mixed account/guest set reaches exactly 12 live clients, the thirteenth receives WebSocket `StatusPolicyViolation` before any presence frame, and two concurrent final-slot handshakes admit exactly one. `./scripts/verify.sh` passes.
+
 ## Task 4 — Bound room creation, expire rooms from birth, and index join tokens
 
 Prevent unbounded never-connected rooms and replace public linear token scans while preserving token/no-oracle behavior.
