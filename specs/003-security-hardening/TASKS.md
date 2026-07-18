@@ -52,6 +52,8 @@ gate = 1
 
 **Context pack:** `internal/auth/auth.go`, `internal/auth/auth_test.go`, `cmd/server/main.go`, `specs/003-security-hardening/PRD.md` §FR-1/US-1, `ARCHITECTURE.md` §9. Backend-only; obey `CONVENTIONS.md` error/logging rules.
 
+> **DONE** `f6989fe` — Evidence: `specs/003-security-hardening/evidence/task-1.txt`. `./scripts/verify.sh` passes: Go tests under `-race`, vet, formatting, frontend tests, and production web build. Seed rejects absent or weak first-boot credentials without credential disclosure, accepts 12 Unicode code points, and preserves an existing database when seed variables are absent.
+
 ## Task 2 — Uniform login work, bounded throttles, and strong account invites
 
 Add a fake-clock token bucket and safe proxy-IP resolution, wire it into login/register, equalize password verification work, and lengthen newly issued codes.
