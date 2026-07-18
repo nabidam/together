@@ -1,0 +1,13 @@
+Task 6 — Demo Gate 1
+
+Result: PASS
+Observer: user
+
+The user completed the production-binary Gate 1 walkthrough and reported it
+passed. The witnessed journey covered the authentication and room-boundary
+checks listed in Task 6, including weak/strong/existing seed behavior,
+authentication throttling, WebSocket capacity, room expiry and quotas,
+fixed-media start authorization, and malformed-proxy/repeated-login handling.
+
+No screenshots were supplied. No failed observation or follow-up fix task was
+reported.

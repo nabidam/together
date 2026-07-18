@@ -341,6 +341,8 @@ task = 2
 
 **Context pack:** PLAN Demo Gate 1, SPEC kernel journey, PRD US-1–3/error cases, built binary, `docs/OPERATIONS.md`. No code changes.
 
+> **DONE** — Evidence: `specs/003-security-hardening/evidence/task-6.txt`. Human walkthrough passed; no findings were reported.
+
 ## Task 7 — Crystallize Gate 1 as a disposable production journey
 
 Encode the witnessed authentication/room journey so later changes cannot regress it.
