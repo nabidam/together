@@ -6,7 +6,10 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"math"
 	"net/http"
+	"strconv"
+	"time"
 )
 
 type ctxKey struct{}
@@ -38,6 +41,12 @@ func writeJSON(w http.ResponseWriter, v any) {
 	json.NewEncoder(w).Encode(v)
 }
 
+func writeJSONStatus(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(v)
+}
+
 // ponytail: Secure when TLS-terminated by Caddy; plain http only in dev/tests
 func secureCookie(r *http.Request) bool {
 	return r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
@@ -54,37 +63,61 @@ func setSession(w http.ResponseWriter, r *http.Request, d *sql.DB, u User) error
 }
 
 func Routes(mux *http.ServeMux, d *sql.DB) {
+	RoutesWithThrottle(mux, d, newThrottle(time.Now))
+}
+
+func RoutesWithThrottle(mux *http.ServeMux, d *sql.DB, limits *throttle) {
 	type creds struct{ Username, Password, Code string }
+	throttled := func(w http.ResponseWriter, r *http.Request, scope string, rule throttleRule) (string, bool) {
+		ip := clientIP(r.RemoteAddr, r.Header.Get("X-Forwarded-For"))
+		key := scope + ":" + ip
+		if ok, retry := limits.reserve(key, rule); !ok {
+			w.Header().Set("Retry-After", strconv.FormatInt(int64(math.Ceil(retry.Seconds())), 10))
+			writeJSONStatus(w, http.StatusTooManyRequests, map[string]string{"error": "too many attempts"})
+			return key, false
+		}
+		return key, true
+	}
 
 	mux.HandleFunc("POST /api/login", func(w http.ResponseWriter, r *http.Request) {
+		ip, ok := throttled(w, r, "login", loginThrottle)
+		if !ok {
+			return
+		}
 		var c creds
 		json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&c)
 		u, err := Login(d, c.Username, c.Password)
 		if err != nil {
-			http.Error(w, err.Error(), 401)
+			writeJSONStatus(w, http.StatusUnauthorized, map[string]string{"error": ErrBadLogin.Error()})
 			return
 		}
+		limits.refund(ip, loginThrottle)
 		if err := setSession(w, r, d, u); err != nil {
-			http.Error(w, "server error", 500)
+			writeJSONStatus(w, http.StatusInternalServerError, map[string]string{"error": "server error"})
 			return
 		}
 		writeJSON(w, u)
 	})
 
 	mux.HandleFunc("POST /api/register", func(w http.ResponseWriter, r *http.Request) {
+		ip, ok := throttled(w, r, "register", registerThrottle)
+		if !ok {
+			return
+		}
 		var c creds
 		json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&c)
 		if len(c.Username) < 2 || len(c.Username) > 32 || len(c.Password) < 8 {
-			http.Error(w, "username 2–32 chars, password min 8", 400)
+			writeJSONStatus(w, http.StatusBadRequest, map[string]string{"error": "username 2–32 chars, password min 8"})
 			return
 		}
 		u, err := Register(d, c.Code, c.Username, c.Password)
 		if err != nil {
-			http.Error(w, err.Error(), 400)
+			writeJSONStatus(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
+		limits.refund(ip, registerThrottle)
 		if err := setSession(w, r, d, u); err != nil {
-			http.Error(w, "server error", 500)
+			writeJSONStatus(w, http.StatusInternalServerError, map[string]string{"error": "server error"})
 			return
 		}
 		writeJSON(w, u)
@@ -102,10 +135,16 @@ func Routes(mux *http.ServeMux, d *sql.DB) {
 	}))
 
 	mux.HandleFunc("POST /api/admin/invites", Require(d, true, func(w http.ResponseWriter, r *http.Request) {
-		b := make([]byte, 4)
-		rand.Read(b)
+		b := make([]byte, 16)
+		if _, err := rand.Read(b); err != nil {
+			writeJSONStatus(w, http.StatusInternalServerError, map[string]string{"error": "server error"})
+			return
+		}
 		code := hex.EncodeToString(b)
-		d.Exec(`INSERT INTO invite_codes (code, created_by) VALUES (?,?)`, code, From(r).ID)
+		if _, err := d.Exec(`INSERT INTO invite_codes (code, created_by) VALUES (?,?)`, code, From(r).ID); err != nil {
+			writeJSONStatus(w, http.StatusInternalServerError, map[string]string{"error": "server error"})
+			return
+		}
 		writeJSON(w, map[string]string{"code": code})
 	}))
 

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"together/internal/db"
 )
@@ -21,11 +22,19 @@ func mustJar(t *testing.T) http.CookieJar {
 }
 
 func testServer(t *testing.T) *httptest.Server {
+	return testServerWithThrottle(t, nil)
+}
+
+func testServerWithThrottle(t *testing.T, limits *throttle) *httptest.Server {
 	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
 	t.Cleanup(func() { d.Close() })
 	Seed(d, "admin", "correct horse battery staple")
 	mux := http.NewServeMux()
-	Routes(mux, d)
+	if limits == nil {
+		Routes(mux, d)
+	} else {
+		RoutesWithThrottle(mux, d, limits)
+	}
 	mux.HandleFunc("GET /api/secret", Require(d, false, func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(From(r).Username))
 	}))
@@ -172,4 +181,60 @@ func TestCreateInviteRequiresAdmin(t *testing.T) {
 	if err != nil || r.StatusCode != 403 {
 		t.Fatalf("non-admin invite create: want 403 got %v %d", err, r.StatusCode)
 	}
+}
+
+func TestLoginFailuresHaveUniformJSONAndThrottle(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	ts := testServerWithThrottle(t, newThrottle(func() time.Time { return now }))
+	defer ts.Close()
+
+	post := func(username string) *http.Response {
+		t.Helper()
+		r, err := http.Post(ts.URL+"/api/login", "application/json", strings.NewReader(`{"username":"`+username+`","password":"wrong"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	unknown := post("unknown")
+	defer unknown.Body.Close()
+	known := post("admin")
+	defer known.Body.Close()
+	var unknownBody, knownBody map[string]string
+	json.NewDecoder(unknown.Body).Decode(&unknownBody)
+	json.NewDecoder(known.Body).Decode(&knownBody)
+	if unknown.StatusCode != http.StatusUnauthorized || known.StatusCode != http.StatusUnauthorized || unknownBody["error"] != ErrBadLogin.Error() || knownBody["error"] != ErrBadLogin.Error() {
+		t.Fatalf("login failure responses = %d/%v and %d/%v", unknown.StatusCode, unknownBody, known.StatusCode, knownBody)
+	}
+	for range 3 { // the first two failures above consume two of the five slots.
+		r := post("unknown")
+		r.Body.Close()
+	}
+	limited := post("unknown")
+	defer limited.Body.Close()
+	var body map[string]string
+	json.NewDecoder(limited.Body).Decode(&body)
+	if limited.StatusCode != http.StatusTooManyRequests || body["error"] != "too many attempts" || limited.Header.Get("Retry-After") != "12" {
+		t.Fatalf("limited response = %d %v retry=%q", limited.StatusCode, body, limited.Header.Get("Retry-After"))
+	}
+}
+
+func TestNewAndLegacyInviteCodesRegister(t *testing.T) {
+	ts := testServer(t)
+	defer ts.Close()
+	code := newInvite(t, ts)
+	if len(code) != 32 {
+		t.Fatalf("new invite length = %d, want 32", len(code))
+	}
+	for _, r := range code {
+		if !(r >= '0' && r <= '9') && !(r >= 'a' && r <= 'f') {
+			t.Fatalf("new invite has non-lowercase-hex character %q", r)
+		}
+	}
+
+	r, err := http.Post(ts.URL+"/api/register", "application/json", strings.NewReader(`{"code":"`+code+`","username":"member32","password":"longpassword"}`))
+	if err != nil || r.StatusCode != http.StatusOK {
+		t.Fatalf("register new invite: %v %v", err, r.Status)
+	}
+	r.Body.Close()
 }

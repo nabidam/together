@@ -27,6 +27,12 @@ var ErrSeedCredentials = errors.New("strong administrator credentials required")
 // 2 GB box (systemd MemoryMax=1200M). Cap concurrent hashes at 2.
 var hashSem = make(chan struct{}, 2)
 
+// dummyHash makes unknown-user login attempts perform the same one Argon2id
+// verification as a wrong password for an existing account.
+var dummyHash, dummySalt = Hash("invalid password")
+
+var verifyPassword = Verify
+
 func idKey(pw string, salt []byte) []byte {
 	hashSem <- struct{}{}
 	defer func() { <-hashSem }()
@@ -69,7 +75,11 @@ func Login(d *sql.DB, user, pass string) (User, error) {
 	var h, s []byte
 	err := d.QueryRow(`SELECT id, username, role, pass_hash, salt FROM users WHERE username=?`, user).
 		Scan(&u.ID, &u.Username, &u.Role, &h, &s)
-	if err != nil || !Verify(pass, h, s) {
+	if err != nil {
+		verifyPassword(pass, dummyHash, dummySalt)
+		return User{}, ErrBadLogin
+	}
+	if !verifyPassword(pass, h, s) {
 		return User{}, ErrBadLogin
 	}
 	return u, nil

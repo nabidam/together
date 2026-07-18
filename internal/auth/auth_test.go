@@ -42,6 +42,47 @@ func TestSessionRoundtrip(t *testing.T) {
 	}
 }
 
+func TestLogin_AlwaysVerifiesOnce(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	defer d.Close()
+	if err := Seed(d, "admin", "correct horse battery staple"); err != nil {
+		t.Fatal(err)
+	}
+
+	original := verifyPassword
+	t.Cleanup(func() { verifyPassword = original })
+	for _, username := range []string{"missing", "admin"} {
+		calls := 0
+		verifyPassword = func(string, []byte, []byte) bool {
+			calls++
+			return false
+		}
+		if _, err := Login(d, username, "wrong password"); !errors.Is(err, ErrBadLogin) {
+			t.Fatalf("Login(%q) error = %v", username, err)
+		}
+		if calls != 1 {
+			t.Fatalf("Login(%q) verifier calls = %d, want 1", username, calls)
+		}
+	}
+}
+
+func TestRegister_AcceptsUnusedLegacyInviteOnce(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	defer d.Close()
+	if err := Seed(d, "admin", "correct horse battery staple"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Exec(`INSERT INTO invite_codes (code, created_by) VALUES ('deadbeef', 1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Register(d, "deadbeef", "legacy", "longpassword"); err != nil {
+		t.Fatalf("legacy invite registration error = %v", err)
+	}
+	if _, err := Register(d, "deadbeef", "again", "longpassword"); err == nil {
+		t.Fatal("legacy invite should only be redeemable once")
+	}
+}
+
 func TestSeed_RequiresStrongCredentialsOnFirstBoot(t *testing.T) {
 	tests := []struct {
 		name string
