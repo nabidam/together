@@ -225,6 +225,8 @@ gate = 1
 
 **Context pack:** all `internal/live/{hub,rooms}.go` and tests, PRD FR-7–9, `ARCHITECTURE.md` §3.2/§4.3/§5, `CONVENTIONS.md` concurrency/test rules. Backend-only.
 
+> **DONE** `642dbdc` — Evidence: `specs/003-security-hardening/evidence/task-4.txt`. `./scripts/verify.sh` passes: Go tests under `-race`, vet, formatting, frontend tests, dependency audit, and production web build. Rooms expire from creation when never connected; owner/global quotas reject excess rooms without allocating state; the current-token index is updated on create, regeneration, and teardown while stale/unknown tokens remain indistinguishable.
+
 ## Task 5 — Enforce fixed-media WebSocket authorization
 
 Close the room-scope authorization gap in the legacy `start` frame without changing ordinary play/pause/seek permissions.
