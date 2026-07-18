@@ -43,8 +43,8 @@ func newStackIdle(t *testing.T, idle time.Duration) (*httptest.Server, *Hub, *sq
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { d.Close() })
-	auth.Seed(d, "alice", "password") // id 1, admin
-	bh, bs := auth.Hash("password")
+	auth.Seed(d, "alice", "correct horse battery staple") // id 1, admin
+	bh, bs := auth.Hash("correct horse battery staple")
 	d.Exec(`INSERT INTO users (username, pass_hash, salt) VALUES ('bob', ?, ?)`, bh, bs) // id 2, member
 	d.Exec(`INSERT INTO media (kind, title, status, file_path, size_bytes) VALUES ('video','The Movie','ready','x.mp4',10)`)
 

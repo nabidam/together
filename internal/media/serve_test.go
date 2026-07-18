@@ -19,7 +19,7 @@ func TestStreamSupportsRangeAndAuth(t *testing.T) {
 	dir := t.TempDir()
 	d, _ := db.Open(filepath.Join(dir, "t.db"))
 	defer d.Close()
-	auth.Seed(d, "admin", "password")
+	auth.Seed(d, "admin", "correct horse battery staple")
 	fp := filepath.Join(dir, "1.mp4")
 	os.WriteFile(fp, []byte("0123456789"), 0o644)
 	d.Exec(`INSERT INTO media (kind, title, status, file_path, size_bytes) VALUES ('video','M','ready',?,10)`, fp)
@@ -43,7 +43,7 @@ func TestStreamSupportsRangeAndAuth(t *testing.T) {
 
 	jar, _ := cookiejar.New(nil)
 	c := &http.Client{Jar: jar}
-	c.Post(ts.URL+"/api/login", "application/json", strings.NewReader(`{"username":"admin","password":"password"}`))
+	c.Post(ts.URL+"/api/login", "application/json", strings.NewReader(`{"username":"admin","password":"correct horse battery staple"}`))
 
 	req, _ := http.NewRequest("GET", ts.URL+"/media/1/stream", nil)
 	req.Header.Set("Range", "bytes=2-4")
@@ -68,7 +68,7 @@ func TestMediaKindFilterV2Vocabulary(t *testing.T) {
 	dir := t.TempDir()
 	d, _ := db.Open(filepath.Join(dir, "t.db"))
 	defer d.Close()
-	auth.Seed(d, "admin", "password")
+	auth.Seed(d, "admin", "correct horse battery staple")
 	d.Exec(`INSERT INTO media (kind, title, status, file_path, size_bytes) VALUES ('video','V','ready','v.mp4',1)`)
 	d.Exec(`INSERT INTO media (kind, title, status, file_path, size_bytes) VALUES ('audio','A','ready','a.m4a',1)`)
 
@@ -86,7 +86,7 @@ func TestMediaKindFilterV2Vocabulary(t *testing.T) {
 
 	jar, _ := cookiejar.New(nil)
 	c := &http.Client{Jar: jar}
-	c.Post(ts.URL+"/api/login", "application/json", strings.NewReader(`{"username":"admin","password":"password"}`))
+	c.Post(ts.URL+"/api/login", "application/json", strings.NewReader(`{"username":"admin","password":"correct horse battery staple"}`))
 
 	get := func(query string) []map[string]any {
 		r, _ := c.Get(ts.URL + "/api/media" + query)
@@ -117,7 +117,7 @@ func TestDownloadAttachmentVsStreamInline(t *testing.T) {
 	dir := t.TempDir()
 	d, _ := db.Open(filepath.Join(dir, "t.db"))
 	defer d.Close()
-	auth.Seed(d, "admin", "password")
+	auth.Seed(d, "admin", "correct horse battery staple")
 	fp := filepath.Join(dir, "1.mp4")
 	os.WriteFile(fp, []byte("0123456789"), 0o644)
 	d.Exec(`INSERT INTO media (kind, title, status, file_path, size_bytes) VALUES ('video','M','ready',?,10)`, fp)
@@ -131,7 +131,7 @@ func TestDownloadAttachmentVsStreamInline(t *testing.T) {
 
 	jar, _ := cookiejar.New(nil)
 	c := &http.Client{Jar: jar}
-	c.Post(ts.URL+"/api/login", "application/json", strings.NewReader(`{"username":"admin","password":"password"}`))
+	c.Post(ts.URL+"/api/login", "application/json", strings.NewReader(`{"username":"admin","password":"correct horse battery staple"}`))
 
 	req, _ := http.NewRequest("GET", ts.URL+"/media/1/download", nil)
 	req.Header.Set("Range", "bytes=2-4")
@@ -168,7 +168,7 @@ func TestSubtitleGatingOnMediaReady(t *testing.T) {
 	dir := t.TempDir()
 	d, _ := db.Open(filepath.Join(dir, "t.db"))
 	defer d.Close()
-	auth.Seed(d, "admin", "password")
+	auth.Seed(d, "admin", "correct horse battery staple")
 
 	// Create a temp VTT file
 	vttPath := filepath.Join(dir, "subs.vtt")
@@ -200,7 +200,7 @@ func TestSubtitleGatingOnMediaReady(t *testing.T) {
 
 	jar, _ := cookiejar.New(nil)
 	c := &http.Client{Jar: jar}
-	c.Post(ts.URL+"/api/login", "application/json", strings.NewReader(`{"username":"admin","password":"password"}`))
+	c.Post(ts.URL+"/api/login", "application/json", strings.NewReader(`{"username":"admin","password":"correct horse battery staple"}`))
 
 	// Processing media subs should 404
 	r, _ := c.Get(ts.URL + "/media/1/subs/1")

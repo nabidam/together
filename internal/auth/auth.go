@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"time"
+	"unicode/utf8"
 
 	"golang.org/x/crypto/argon2"
 )
@@ -18,6 +19,9 @@ type User struct {
 }
 
 var ErrBadLogin = errors.New("invalid username or password")
+
+// ErrSeedCredentials deliberately contains no supplied credential values.
+var ErrSeedCredentials = errors.New("strong administrator credentials required")
 
 // argon2id uses 64 MB per invocation; unbounded concurrent logins could OOM the
 // 2 GB box (systemd MemoryMax=1200M). Cap concurrent hashes at 2.
@@ -42,14 +46,18 @@ func Verify(pw string, hash, salt []byte) bool {
 // GC drops expired sessions. Called once at boot; the table stays tiny at ≤10 users.
 func GC(d *sql.DB) { d.Exec(`DELETE FROM sessions WHERE expires_at <= unixepoch()`) }
 
-// Seed creates an admin user if the users table is empty.
+// Seed creates an admin user if the users table is empty. First boot requires
+// a username and a password of at least 12 Unicode code points.
 func Seed(d *sql.DB, user, pass string) error {
 	var n int
 	if err := d.QueryRow(`SELECT count(*) FROM users`).Scan(&n); err != nil {
 		return err
 	}
-	if n > 0 || user == "" {
+	if n > 0 {
 		return nil
+	}
+	if user == "" || utf8.RuneCountInString(pass) < 12 {
+		return ErrSeedCredentials
 	}
 	h, s := Hash(pass)
 	_, err := d.Exec(`INSERT INTO users (username, pass_hash, salt, role) VALUES (?,?,?, 'admin')`, user, h, s)

@@ -23,7 +23,7 @@ func mustJar(t *testing.T) http.CookieJar {
 func testServer(t *testing.T) *httptest.Server {
 	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
 	t.Cleanup(func() { d.Close() })
-	Seed(d, "admin", "pw")
+	Seed(d, "admin", "correct horse battery staple")
 	mux := http.NewServeMux()
 	Routes(mux, d)
 	mux.HandleFunc("GET /api/secret", Require(d, false, func(w http.ResponseWriter, r *http.Request) {
@@ -41,7 +41,7 @@ func TestLoginFlow(t *testing.T) {
 		t.Fatalf("want 401 got %d", r.StatusCode)
 	}
 	r, err := jar.Post(ts.URL+"/api/login", "application/json",
-		strings.NewReader(`{"username":"admin","password":"pw"}`))
+		strings.NewReader(`{"username":"admin","password":"correct horse battery staple"}`))
 	if err != nil || r.StatusCode != 200 {
 		t.Fatalf("login: %v %d", err, r.StatusCode)
 	}
@@ -56,7 +56,7 @@ func adminClient(t *testing.T, ts *httptest.Server) *http.Client {
 	t.Helper()
 	c := &http.Client{Jar: mustJar(t)}
 	r, err := c.Post(ts.URL+"/api/login", "application/json",
-		strings.NewReader(`{"username":"admin","password":"pw"}`))
+		strings.NewReader(`{"username":"admin","password":"correct horse battery staple"}`))
 	if err != nil || r.StatusCode != 200 {
 		t.Fatalf("admin login: %v %d", err, r.StatusCode)
 	}

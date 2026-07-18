@@ -20,7 +20,7 @@ func adminClient(t *testing.T) (*http.Client, *httptest.Server, string) {
 	dir := t.TempDir()
 	d, _ := db.Open(filepath.Join(dir, "t.db"))
 	t.Cleanup(func() { d.Close() })
-	auth.Seed(d, "admin", "password")
+	auth.Seed(d, "admin", "correct horse battery staple")
 	mux := http.NewServeMux()
 	auth.Routes(mux, d)
 	UploadRoutes(mux, d, dir)
@@ -28,7 +28,7 @@ func adminClient(t *testing.T) (*http.Client, *httptest.Server, string) {
 	t.Cleanup(ts.Close)
 	jar, _ := cookiejar.New(nil)
 	c := &http.Client{Jar: jar}
-	c.Post(ts.URL+"/api/login", "application/json", strings.NewReader(`{"username":"admin","password":"password"}`))
+	c.Post(ts.URL+"/api/login", "application/json", strings.NewReader(`{"username":"admin","password":"correct horse battery staple"}`))
 	return c, ts, dir
 }
 

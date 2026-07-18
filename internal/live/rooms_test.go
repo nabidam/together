@@ -553,8 +553,8 @@ func newRoomGateStack(t *testing.T) (ts *httptest.Server, hub *Hub, alice, bob s
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { d.Close() })
-	auth.Seed(d, "alice", "password") // id 1, admin
-	bh, bs := auth.Hash("password")
+	auth.Seed(d, "alice", "correct horse battery staple") // id 1, admin
+	bh, bs := auth.Hash("correct horse battery staple")
 	d.Exec(`INSERT INTO users (username, pass_hash, salt) VALUES ('bob', ?, ?)`, bh, bs)                                   // id 2, member
 	d.Exec(`INSERT INTO media (kind, title, status, file_path, size_bytes) VALUES ('video','Movie A','ready','a.mp4',10)`) // id 1
 	d.Exec(`INSERT INTO media (kind, title, status, file_path, size_bytes) VALUES ('video','Movie B','ready','b.mp4',10)`) // id 2
