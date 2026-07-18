@@ -452,6 +452,8 @@ gate = 2
 
 **Context pack:** `internal/media/upload.go`, `internal/media/upload_test.go`, `internal/media/pipeline.go`, `web/src/lib/upload.js`, `cmd/server/main.go`, PRD upload sections, `ARCHITECTURE.md` §4.2/§8–9, `CONVENTIONS.md`. UI logic only; no visual components or DESIGN.md.
 
+> **DONE** `63ab1d0` — Evidence: `specs/003-security-hardening/evidence/task-8.txt`. Upload creation now declares and validates the total, every request body is bounded, resumable chunks are exact and durable, and the client sends both `sizeBytes` and `Upload-Length`. `./scripts/verify.sh` passes.
+
 ## Task 9 — Extend the production proof and synchronize living contracts
 
 Extend the journey through upload/restart behavior and make operator/architecture documentation describe only implemented controls.
