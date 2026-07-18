@@ -113,6 +113,8 @@ gate = 1
 
 **Context pack:** `internal/auth/auth.go`, `internal/auth/http.go`, both existing auth test files, `cmd/server/main.go`, PRD authentication sections, `ARCHITECTURE.md` §4.1/§8–9, `deploy/Caddyfile`. Backend-only; no frontend or design docs.
 
+> **DONE** `0cae561` — Evidence: `specs/003-security-hardening/evidence/task-2.txt`. `./scripts/verify.sh` passes: Go tests under `-race`, vet, formatting, frontend tests, dependency audit, and production web build. Login failures perform one Argon2 verification and return uniform JSON; bounded fake-clock throttles protect login/register by trusted client IP; new invites are 128-bit lowercase hexadecimal while legacy unused codes remain redeemable.
+
 ## Task 3 — Enforce live WebSocket capacity
 
 Move the 12-participant security boundary to the actual live-connection admission point.
