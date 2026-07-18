@@ -13,7 +13,7 @@ sha256sum --check SHA256SUMS
 tar -xzf together_linux_amd64.tar.gz
 sudo install -m 0755 together /usr/local/bin/together
 
-ADMIN_USER=admin ADMIN_PASS='choose-a-long-password' together
+ADMIN_USER=admin ADMIN_PASS='choose-a-password-of-at-least-12-characters' together
 ```
 
 Open `http://127.0.0.1:8080` only for local testing. For an Internet-facing server, follow the [operations guide](docs/OPERATIONS.md) to run Together behind Caddy with HTTPS.
@@ -31,7 +31,7 @@ They require no Node.js, Go toolchain, or frontend files at runtime. They do req
 
 ```sh
 # Backend API and embedded SPA on :8080.
-ADMIN_USER=admin ADMIN_PASS=changeme go run ./cmd/server
+ADMIN_USER=admin ADMIN_PASS='development-password-12' go run ./cmd/server
 
 # Vite development server on :5173; it proxies API, WebSocket, and media routes.
 cd web && npm run dev
@@ -51,6 +51,8 @@ cd web && npm run dev
 
 `scripts/release.sh` builds the frontend once, embeds it through `go:embed`, cross-compiles the supported targets, and restores the tracked web placeholder before exiting. The release archive contains exactly one executable.
 
+`scripts/verify.sh` runs the production security journey when `ffmpeg` and `ffprobe` are installed; otherwise it prints a skip and the release gate must run that journey. The journey uses only a temporary data directory and covers seed credentials, throttling, room limits, media scope, bounded resumable uploads, and restart durability.
+
 ## Operations and security
 
 - [Server setup, Caddy reverse proxy, systemd, backups, restore, and upgrades](docs/OPERATIONS.md)
@@ -58,6 +60,8 @@ cd web && npm run dev
 - [Responsible vulnerability reporting](SECURITY.md)
 
 The supplied systemd unit binds the app to `127.0.0.1:8080`; Caddy is the public HTTPS endpoint. Do not expose the application port directly to the Internet.
+
+On first boot, Together requires a non-empty `ADMIN_USER` and an `ADMIN_PASS` of at least 12 Unicode code points. `TOGETHER_MAX_UPLOAD_BYTES` sets a positive per-upload limit and defaults to 20 GiB; see the [operations guide](docs/OPERATIONS.md#upload-capacity) for sizing and proxy-trust guidance.
 
 ## Contributing
 

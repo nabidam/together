@@ -1,8 +1,12 @@
 #!/usr/bin/env sh
-# Production regression journey for the authentication and room boundaries.
+# Production regression journey for the authentication, room, and upload boundaries.
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+if [ -n "${TOGETHER_DATA:-}" ]; then
+  printf '%s\n' 'security-e2e: TOGETHER_DATA is managed by this disposable journey' >&2
+  exit 2
+fi
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/together-security-e2e.XXXXXX")
 ADDR=${TOGETHER_E2E_ADDR:-127.0.0.1:18080}
 BASE="http://$ADDR"
@@ -20,7 +24,7 @@ fail() {
 
 cleanup() {
   status=$?
-  trap - EXIT HUP INT TERM
+  trap - 0 HUP INT TERM
   if [ -n "${SERVER_PID:-}" ] && kill -0 "$SERVER_PID" 2>/dev/null; then
     kill "$SERVER_PID" 2>/dev/null || true
     wait "$SERVER_PID" 2>/dev/null || true
@@ -31,7 +35,7 @@ cleanup() {
   rm -rf "$TMP"
   exit "$status"
 }
-trap cleanup EXIT HUP INT TERM
+trap cleanup 0 HUP INT TERM
 
 start_server() {
   TOGETHER_DATA="$TMP/data" TOGETHER_ADDR="$ADDR" TOGETHER_ROOM_IDLE=2s \
@@ -71,6 +75,10 @@ fi
 
 start_server
 
+if [ "${TOGETHER_E2E_INJECT_FAILURE:-}" = "1" ]; then
+  fail "injected failure after production server start"
+fi
+
 ffmpeg -hide_banner -loglevel error -f lavfi -i color=c=black:s=16x16:d=1 -f lavfi -i anullsrc=r=44100:cl=mono \
   -shortest -c:v libx264 -pix_fmt yuv420p -c:a aac "$TMP/fixture.mp4"
 
@@ -88,6 +96,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/coder/websocket"
@@ -108,13 +117,32 @@ func jsonID(b []byte, key string) int64 { var v map[string]any; if json.Unmarsha
 func jsonString(b []byte, key string) string { var v map[string]any; if json.Unmarshal(b, &v) != nil { die("invalid JSON: %s", b) }; s, ok := v[key].(string); if !ok { die("missing %s in %s", key, b) }; return s }
 func (j journey) login(user, pass string, headers map[string]string, want int) []byte { return j.expect("POST", "/api/login", fmt.Sprintf(`{"username":%q,"password":%q}`, user, pass), headers, want) }
 func (j journey) upload(path, title string) int64 {
-	id := jsonID(j.expect("POST", "/api/admin/media", fmt.Sprintf(`{"title":%q,"origName":"fixture.mp4"}`, title), nil, 200), "id")
+	fi, err := os.Stat(path); if err != nil { die("stat fixture: %v", err) }
+	id := jsonID(j.expect("POST", "/api/admin/media", fmt.Sprintf(`{"title":%q,"origName":"fixture.mp4","sizeBytes":%d}`, title, fi.Size()), nil, 200), "id")
 	f, err := os.Open(path); if err != nil { die("open fixture: %v", err) }; defer f.Close()
 	req, err := http.NewRequest("PATCH", fmt.Sprintf("%s/api/admin/media/%d/blob?offset=0", j.base, id), f); if err != nil { die("upload request: %v", err) }
+	req.Header.Set("Upload-Length", fmt.Sprint(fi.Size()))
 	resp, err := j.client.Do(req); if err != nil { die("upload: %v", err) }; out, _ := io.ReadAll(resp.Body); resp.Body.Close(); if resp.StatusCode != 200 { die("upload = %d: %s", resp.StatusCode, out) }
 	j.expect("POST", fmt.Sprintf("/api/admin/media/%d/finish", id), "", nil, 202)
 	for n := 0; n < 100; n++ { time.Sleep(100 * time.Millisecond); b := j.expect("GET", "/api/media", "", nil, 200); var media []struct { ID int64 `json:"id"`; Status string `json:"status"` }; if json.Unmarshal(b, &media) != nil { die("media JSON: %s", b) }; for _, m := range media { if m.ID == id && m.Status == "ready" { return id } } }
 	die("media %d did not become ready", id); return 0
+}
+func (j journey) boundedUpload() {
+	if code, _ := j.request("POST", "/api/admin/media", `{"title":"missing size","origName":"x.mp4"}`, nil); code != 400 { die("missing declared size = %d, want 400", code) }
+	tooLargeJSON := `{"title":"` + strings.Repeat("x", 4096) + `","origName":"x.mp4","sizeBytes":1}`
+	if code, _ := j.request("POST", "/api/admin/media", tooLargeJSON, nil); code != 413 { die("oversize creation JSON = %d, want 413", code) }
+	id := jsonID(j.expect("POST", "/api/admin/media", `{"title":"bounded","origName":"bounded.bin","sizeBytes":2}`, nil, 200), "id")
+	patch := func(target, total, offset int64, body io.Reader, want int) {
+		req, err := http.NewRequest("PATCH", fmt.Sprintf("%s/api/admin/media/%d/blob?offset=%d", j.base, target, offset), body); if err != nil { die("bounded upload request: %v", err) }
+		req.Header.Set("Upload-Length", fmt.Sprint(total))
+		resp, err := j.client.Do(req); if err != nil { die("bounded upload: %v", err) }; defer resp.Body.Close(); if resp.StatusCode != want { out, _ := io.ReadAll(resp.Body); die("bounded upload = %d, want %d: %s", resp.StatusCode, want, out) }
+	}
+	patch(id, 2, 0, strings.NewReader("abc"), 409)
+	b := j.expect("GET", fmt.Sprintf("/api/admin/media/%d/blob", id), "", nil, 200); if jsonID(b, "size") != 0 { die("overrun wrote bytes: %s", b) }
+	patch(id, 2, 0, strings.NewReader("ab"), 200)
+	chunkID := jsonID(j.expect("POST", "/api/admin/media", fmt.Sprintf(`{"title":"chunk","origName":"chunk.bin","sizeBytes":%d}`, (8<<20)+2), nil, 200), "id")
+	patch(chunkID, (8<<20)+2, 0, strings.NewReader(strings.Repeat("x", (8<<20)+1)), 413)
+	b = j.expect("GET", fmt.Sprintf("/api/admin/media/%d/blob", chunkID), "", nil, 200); if jsonID(b, "size") != 0 { die("oversize chunk changed size: %s", b) }
 }
 func (j journey) room(media int64) (string, string) { b := j.expect("POST", "/api/rooms", fmt.Sprintf(`{"mediaId":%d}`, media), nil, 201); var v map[string]string; if json.Unmarshal(b, &v) != nil { die("room JSON: %s", b) }; return v["id"], v["joinToken"] }
 func (j journey) guest(token string) journey { g := journey{base:j.base, client:newClient()}; g.expect("POST", "/api/rooms/join", fmt.Sprintf(`{"token":%q,"name":"guest"}`, token), nil, 200); return g }
@@ -131,6 +159,7 @@ func main() {
 	member.login("member", "longpassword", map[string]string{"X-Forwarded-For":"198.51.100.2"}, 200)
 	status, body := j.request("POST", "/api/login", `{"username":"unknown","password":"wrong"}`, map[string]string{"X-Forwarded-For":"not-an-ip, , ???"}); if status != 401 || string(body) != "{\"error\":\"invalid username or password\"}\n" { die("malformed proxy login = %d: %s", status, body) }
 	if status, _ := j.request("GET", "/healthz", "", nil); status != 200 { die("server unhealthy after malformed proxy input") }
+	j.boundedUpload()
 	mediaOne, mediaTwo := j.upload(fixture, "one"), j.upload(fixture, "two")
 	room, token := j.room(mediaOne); guest := j.guest(token)
 	c := guest.ws(room); defer c.CloseNow(); hello := readFrame(c); if hello["type"] != "hello" { die("first frame = %v, want hello", hello) }
@@ -160,7 +189,34 @@ for _ in $(seq 1 50); do
   if curl --fail --silent "$BASE/healthz" >/dev/null 2>&1; then break; fi
   sleep 0.1
 done
-curl --fail --silent --show-error -H 'Content-Type: application/json' \
-  --data '{"username":"member","password":"longpassword"}' "$BASE/api/login" >/dev/null
+cat >"$TMP/restart.go" <<'EOF'
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/cookiejar"
+	"os"
+	"time"
+)
+
+func die(format string, args ...any) { panic(fmt.Sprintf(format, args...)) }
+func main() {
+	if len(os.Args) != 2 { die("usage: restart BASE") }
+	jar, err := cookiejar.New(nil); if err != nil { die("cookie jar: %v", err) }
+	c := &http.Client{Jar: jar, Timeout: 10 * time.Second}
+	req, err := http.NewRequest("POST", os.Args[1]+"/api/login", bytes.NewBufferString(`{"username":"member","password":"longpassword"}`)); if err != nil { die("login request: %v", err) }
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.Do(req); if err != nil { die("login: %v", err) }; if resp.StatusCode != 200 { die("restart login = %d", resp.StatusCode) }; resp.Body.Close()
+	for _, path := range []string{"/api/media", "/api/rooms"} {
+		resp, err = c.Get(os.Args[1] + path); if err != nil { die("GET %s: %v", path, err) }; body, _ := io.ReadAll(resp.Body); resp.Body.Close(); if resp.StatusCode != 200 { die("GET %s = %d", path, resp.StatusCode) }
+		if path == "/api/media" { var media []map[string]any; if json.Unmarshal(body, &media) != nil || len(media) < 2 { die("durable media missing after restart: %s", body) } } else { var rooms []any; if json.Unmarshal(body, &rooms) != nil || len(rooms) != 0 { die("ephemeral rooms survived restart: %s", body) } }
+	}
+}
+EOF
+go run "$TMP/restart.go" "$BASE"
 
 printf '%s\n' 'security-e2e: passed'
