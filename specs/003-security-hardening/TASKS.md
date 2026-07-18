@@ -514,6 +514,8 @@ gate = 2
 
 **Context pack:** Task 7 script, Task 8 diff/evidence, all files listed above, SPEC/PRD/PLAN, `ARCHITECTURE.md` §2/§4/§5/§8–10, current operations/hardening docs. No UI changes.
 
+> **DONE** `7228fec` — Evidence: `specs/003-security-hardening/evidence/task-9.txt`. The production journey now covers bounded upload requests and restart durability, provides an injected-failure cleanup path, and keeps the generated web placeholder clean when run directly. `./scripts/verify.sh` passes with the journey enabled when ffmpeg/ffprobe are available; living architecture and operator contracts record the implemented limits and proxy-trust model.
+
 ## Task 10 — Release Gate: hardened production composition
 
 Run the release build and security exit bar. Do not implement fixes inside this task; route failures back to new fix tasks.
