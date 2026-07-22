@@ -17,7 +17,7 @@ Living document. Applies to the V2 codebase (ephemeral rooms + local playback). 
 - Tests: `<name>.test.js` beside the lib, plain `node --test`.
 
 ### Wire protocol
-- Frame `type` strings: lowercase, `snake_case` when multiword, exactly as `ARCHITECTURE.md` §4.5 (`hello`, `presence`, `chat`, `activity`, `intent`, `status`, `room_closed`, `pong`, `error`, `start`, `end`, `ping`). Enum values likewise (`file_ready`, `in_sync`).
+- Frame `type` strings: lowercase, `snake_case` when multiword, exactly as `ARCHITECTURE.md` §4.5 (`hello`, `presence`, `chat`, `activity`, `intent`, `status`, `leave`, `left`, `user_left`, `user_rejoined`, `room_closed`, `pong`, `error`, `start`, `end`, `ping`). Enum values likewise (`file_ready`, `in_sync`).
 - JSON fields: `camelCase` (`roomId`, `sizeBytes`, `isGuest`, `createdAt`).
 - Field names are hand-matched between `internal/live/hub.go` and `web/src/lib/ws.js` — no codegen. Change both sides in the same commit, always.
 - Time units: `pong.serverTime` is unix **milliseconds**; chat `createdAt` is unix **seconds**. Never mix.

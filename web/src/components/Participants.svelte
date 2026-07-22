@@ -3,10 +3,10 @@
   import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip/index.js";
 
   let { users = [] } = $props();
-  const label = (status) => ({ downloading: "Downloading", file_ready: "File ready", in_sync: "In sync" })[status] ?? "Downloading";
+  const label = (status) => ({ downloading: "Downloading", file_ready: "File ready", in_sync: "In sync", reconnecting: "Reconnecting" })[status] ?? "Downloading";
   const dotClass = (status) => status === "in_sync"
     ? "fill-primary text-primary"
-    : status === "file_ready" ? "fill-secondary text-secondary" : "text-fg";
+    : status === "file_ready" ? "fill-secondary text-secondary" : status === "reconnecting" ? "text-info" : "text-fg";
 </script>
 
 <TooltipProvider>
