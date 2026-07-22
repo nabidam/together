@@ -17,7 +17,7 @@ Two user classes: **account users** (sign in; any of them can host; admins addit
 | S5 | Room — Audio | Now-playing variant of S4 for `kind: audio` media | Same as S4 when the room's media is audio |
 | S6 | Guest Join | Guest opens invite link, picks a display name | `#/join/{token}` — the only pre-auth route besides S1/S2 |
 | S7 | Admin | Upload media, manage library, manage invites | Admin-only link in S3 header; `#/admin` |
-| M1 | Media Picker (modal) | Host picks library item when creating a room | "Create room" on S3 |
+| M1 | Media Picker (modal) | Host picks or proposes a ready library item from inside a room | "Choose media" / "Change media" in S4/S5 |
 | M2 | End Room (confirm modal) | Host confirms explicit teardown | "End room" in S4/S5 host controls |
 | M3 | Regenerate Link (confirm modal) | Host confirms revoking the current invite link | "Regenerate" next to invite link in S4/S5 |
 | M4 | Play From Server (confirm modal) | Explicit opt-in to streaming fallback | "Play from server instead" in acquisition panel |
@@ -35,7 +35,7 @@ Size-mismatch warning is **not** a modal — it is an inline error state of the 
                              ▼
         ┌─────────────── S6 Guest Join ──(name ok)──────┐
         │                                                ▼
-S1 Login ──(auth ok)──► S3 Home ──(create ► M1 pick)──► S4/S5 Room ──(host: M2 end)──► V1 Room Closed
+S1 Login ──(auth ok)──► S3 Home ──(create)──► S4/S5 Room ──(host: M1 choose media)──► S4/S5 Room
    ▲  │                    │  ▲        (join live room)     │                              │
    │  └──► S2 Register ────┘  │                             │ (leave / guest closes tab)   │ (guest: dead end;
    │        (invite code)     └─────────────────────────────┘                              │  account: → S3)
@@ -97,13 +97,13 @@ Same centered single-column layout as S1: Invite code, Username, Password, (Crea
 ```
 
 - Eye goes first to the room list; primary action is **Create room** (top right of the list region).
-- Each row: room name, media title, participant count, media-kind icon. Whole row is the click target (≥44px tall).
+- Each row: room name, media title or "No media selected", participant count, media-kind icon. Whole row is the click target (≥44px tall).
 - **Empty:** "No rooms right now." + centered Create room button — creating a room *is* the empty state's call to action.
 - **Loading:** skeleton rows.
 - **Error:** inline retry banner ("Couldn't load rooms. Retry").
 - Rooms are ephemeral: this list shows only live rooms. There is no history, deliberately.
 
-### M1 — Media Picker (modal over S3)
+### M1 — Media Picker (modal in S4/S5)
 
 ```
 ┌─ Create room ────────────────────────────┐
@@ -120,9 +120,9 @@ Same centered single-column layout as S1: Invite code, Username, Password, (Crea
 ```
 
 - Single-select list of **ready** library items only (in-flight pipeline jobs are excluded). Shows title, kind, exact human-readable size (size matters to the user — they will download it).
-- Create is disabled until an item is selected; room name optional (defaults to media title).
+- Create room asks only for optional room name; it enters S4/S5 without media.
+- Host opens this picker with **Choose media** or **Change media**. Selecting first media applies immediately if alone. Changing existing media sends every other participant a confirmation dialog; switch occurs only after every required participant confirms and resets playback.
 - **Empty:** "Library is empty." + for admins, a link to S7; for non-admin members, "Ask your admin to upload something."
-- On Create → close modal, enter S4/S5 as host.
 
 ### S4 — Room (Video)
 

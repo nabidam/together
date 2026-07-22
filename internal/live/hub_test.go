@@ -328,6 +328,36 @@ func TestWSStart_RoomMediaAndControlsRemainAvailable(t *testing.T) {
 	}
 }
 
+func TestMediaChangeWaitsForEveryParticipant(t *testing.T) {
+	ts, _, d, alice, bob := newStack(t)
+	d.Exec(`INSERT INTO media (kind, title, status, file_path, size_bytes) VALUES ('audio','New Album','ready','album.m4a',10)`)
+	code, out := post(t, ts.URL, "/api/rooms", alice, `{"name":"Open room"}`)
+	if code != http.StatusCreated {
+		t.Fatalf("media-free room: want 201 got %d (%+v)", code, out)
+	}
+	room := out["id"].(string)
+	a := dial(t, ts, room, alice)
+	if hello := read(t, a); hello["room"].(map[string]any)["mediaId"] != float64(0) || hello["activity"] != nil {
+		t.Fatalf("empty room hello wrong: %+v", hello)
+	}
+	b := dial(t, ts, room, bob)
+	read(t, b)
+	waitFor(t, a, "presence")
+
+	send(t, a, frame{"type": "media_change", "mediaId": 2})
+	if requested := waitFor(t, b, "media_change_requested"); requested["media"].(map[string]any)["title"] != "New Album" {
+		t.Fatalf("media proposal missing selected item: %+v", requested)
+	}
+
+	send(t, b, frame{"type": "media_change_confirm"})
+	for _, c := range []*websocket.Conn{a, b} {
+		changed := waitFor(t, c, "media_changed")
+		if changed["room"].(map[string]any)["mediaId"] != float64(2) {
+			t.Fatalf("media did not change after unanimous approval: %+v", changed)
+		}
+	}
+}
+
 func TestHelloCarriesActivityForLateJoiner(t *testing.T) {
 	ts, _, _, alice, bob := newStack(t)
 	room, _ := createRoom(t, ts, alice, 1, "")

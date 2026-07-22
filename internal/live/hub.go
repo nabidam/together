@@ -33,12 +33,13 @@ type Hub struct {
 // Room is ephemeral hub state. All mutable fields are guarded by Room.mu.
 type Room struct {
 	mu           sync.Mutex
-	id           string      // opaque, crypto-random 16 hex chars
-	name         string      // ≤64 chars
-	ownerID      int64       // account user id; isHost := conn.userID == ownerID, live
-	mediaID      int64       // fixed at creation
-	mediaTitle   string      // copied from the media row at creation
-	kind         string      // 'video' | 'audio', copied from the media row
+	id           string // opaque, crypto-random 16 hex chars
+	name         string // ≤64 chars
+	ownerID      int64  // account user id; isHost := conn.userID == ownerID, live
+	mediaID      int64  // 0 until host selects media
+	mediaTitle   string // copied from the selected media row
+	kind         string // 'video' | 'audio', empty until media selected
+	mediaChange  *mediaChangeProposal
 	joinToken    string      // ≥128-bit crypto-random hex; regenerate replaces it
 	watch        *WatchState // nil = no active activity; started at creation
 	clients      map[*client]bool
@@ -63,6 +64,15 @@ type Room struct {
 	// on every inbound frame, letting a test inject a panic into a specific
 	// room's handling without a real bug, to exercise the per-room recover.
 	panicTrigger func()
+}
+
+// mediaChangeProposal snapshots participants when a host proposes a switch.
+// A participant can use multiple tabs, so identity keys—not connections—vote.
+type mediaChangeProposal struct {
+	mediaID int64
+	title   string
+	kind    string
+	waiting map[string]bool
 }
 
 // withLock runs fn with rm.mu held and released via defer — critical for
@@ -246,6 +256,12 @@ func (r *Room) markReconnecting(c *client) { // caller holds r.mu
 			return
 		}
 		delete(r.reconnecting, key)
+		if r.mediaChange != nil {
+			delete(r.mediaChange.waiting, key)
+			if len(r.mediaChange.waiting) == 0 {
+				r.applyMediaChange()
+			}
+		}
 		r.broadcast(marshal(map[string]any{"type": "presence", "users": r.presence()}))
 	})
 	r.reconnecting[key] = rc
@@ -259,6 +275,10 @@ type inMsg struct {
 	Position float64 `json:"position"`
 	T        int64   `json:"t"`
 	State    string  `json:"state"` // status frame: downloading|file_ready|in_sync
+}
+
+func (r *Room) roomJSON() map[string]any {
+	return map[string]any{"name": r.name, "kind": r.kind, "mediaId": r.mediaID}
 }
 
 // Handle upgrades a WS connection scoped to an existing room. The room must
@@ -335,7 +355,7 @@ func (h *Hub) Handle(w http.ResponseWriter, req *http.Request) {
 		"users":    r.presence(),
 		"activity": r.activityJSON(),
 		"chat":     chatHistory,
-		"room":     map[string]any{"name": r.name, "kind": r.kind, "mediaId": r.mediaID},
+		"room":     r.roomJSON(),
 	})
 	r.broadcast(marshal(map[string]any{"type": "presence", "users": r.presence()}))
 	r.mu.Unlock()
@@ -411,13 +431,11 @@ func (h *Hub) dispatch(r *Room, c *client, m inMsg) {
 		})
 
 	case "start":
-		// A room is permanently scoped to the media selected at creation.
-		// Read the fixed id while holding the room lock so a mismatched start
-		// cannot replace its activity with another ready library item.
+		// Playback can only start for the room's currently selected media.
 		r.mu.Lock()
 		matchesRoomMedia := m.MediaID == r.mediaID
 		r.mu.Unlock()
-		if !matchesRoomMedia {
+		if !matchesRoomMedia || m.MediaID == 0 {
 			select {
 			case c.send <- marshal(map[string]any{"type": "error", "body": "media does not match room"}):
 			default:
@@ -454,7 +472,60 @@ func (h *Hub) dispatch(r *Room, c *client, m inMsg) {
 				}
 			}
 		})
+
+	case "media_change":
+		if !c.isHostOf(r) {
+			return
+		}
+		kind, title, ok := h.readyMedia(m.MediaID)
+		if !ok {
+			select {
+			case c.send <- marshal(map[string]any{"type": "error", "body": "media not found or not ready"}):
+			default:
+			}
+			return
+		}
+		r.withLock(func() {
+			if r.mediaChange != nil {
+				return
+			}
+			waiting := map[string]bool{}
+			for participant := range r.clients {
+				if participant != c {
+					waiting[participant.participantKey()] = true
+				}
+			}
+			r.mediaChange = &mediaChangeProposal{mediaID: m.MediaID, title: title, kind: kind, waiting: waiting}
+			if len(waiting) == 0 {
+				r.applyMediaChange()
+				return
+			}
+			r.broadcastExcept(c, marshal(map[string]any{"type": "media_change_requested", "media": map[string]any{"id": m.MediaID, "title": title, "kind": kind}}))
+		})
+
+	case "media_change_confirm":
+		r.withLock(func() {
+			if r.mediaChange == nil || !r.mediaChange.waiting[c.participantKey()] {
+				return
+			}
+			delete(r.mediaChange.waiting, c.participantKey())
+			if len(r.mediaChange.waiting) == 0 {
+				r.applyMediaChange()
+			}
+		})
 	}
+}
+
+// applyMediaChange replaces room media only after every participant approved.
+// Caller holds r.mu.
+func (r *Room) applyMediaChange() {
+	p := r.mediaChange
+	r.mediaID, r.mediaTitle, r.kind = p.mediaID, p.title, p.kind
+	r.mediaChange = nil
+	st := NewWatch(p.mediaID, nowMs())
+	r.watch = &st
+	r.broadcast(marshal(map[string]any{"type": "media_changed", "room": r.roomJSON()}))
+	r.broadcast(marshal(map[string]any{"type": "activity", "activity": r.activityJSON()}))
 }
 
 func (r *Room) depart(c *client, h *Hub) { // caller holds r.mu
@@ -467,6 +538,12 @@ func (r *Room) depart(c *client, h *Hub) { // caller holds r.mu
 		return
 	}
 	key := c.participantKey()
+	if c.leaving && r.mediaChange != nil && !r.hasParticipant(key) {
+		delete(r.mediaChange.waiting, key)
+		if len(r.mediaChange.waiting) == 0 {
+			r.applyMediaChange()
+		}
+	}
 	if c.leaving && !r.hasParticipant(key) && len(r.clients) > 0 {
 		if r.watch != nil && !r.watch.Paused {
 			next, _ := r.watch.Apply("pause", 0, nowMs())
@@ -515,6 +592,12 @@ func (h *Hub) fireEmpty(r *Room) {
 
 // mediaReady reports whether a media row exists and is ready to play.
 func (h *Hub) mediaReady(id int64) bool {
+	_, _, ok := h.readyMedia(id)
+	return ok
+}
+
+func (h *Hub) readyMedia(id int64) (kind, title string, ok bool) {
 	var status string
-	return h.db.QueryRow(`SELECT status FROM media WHERE id=?`, id).Scan(&status) == nil && status == "ready"
+	err := h.db.QueryRow(`SELECT kind, title, status FROM media WHERE id=?`, id).Scan(&kind, &title, &status)
+	return kind, title, err == nil && status == "ready"
 }

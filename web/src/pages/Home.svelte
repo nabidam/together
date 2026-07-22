@@ -7,13 +7,15 @@
   import { Card, CardContent } from "../components/ui/card/index.js";
   import * as Dialog from "../components/ui/dialog/index.js";
   import { Skeleton } from "../components/ui/skeleton/index.js";
-  import MediaPickerDialog from "../components/MediaPickerDialog.svelte";
+  import { Input } from "../components/ui/input/index.js";
 
   let { me, onlogout } = $props();
   let rooms = $state([]);
   let loadState = $state("loading");
   let error = $state("");
   let dialogOpen = $state(false);
+  let roomName = $state("");
+  let creating = $state(false);
 
   async function load() {
     loadState = "loading";
@@ -29,10 +31,20 @@
 
   $effect(() => { load(); });
 
-  async function create({ mediaId, name }) {
-    const room = await post("/api/rooms", { mediaId, name: name || undefined });
-    dialogOpen = false;
-    go(`/room/${room.id}`);
+  async function create(event) {
+    event.preventDefault();
+    creating = true;
+    error = "";
+    try {
+      const room = await post("/api/rooms", { name: roomName.trim() || undefined });
+      dialogOpen = false;
+      roomName = "";
+      go(`/room/${room.id}`);
+    } catch (err) {
+      error = err.message;
+    } finally {
+      creating = false;
+    }
   }
 
   async function logout() {
@@ -63,7 +75,14 @@
           <Button class="h-11" {...props}><Plus /> Create room</Button>
         {/snippet}
       </Dialog.Trigger>
-      <MediaPickerDialog {me} oncreate={create} />
+      <Dialog.Content>
+        <Dialog.Header><Dialog.Title>Create room</Dialog.Title><Dialog.Description>Create room now, then choose media with everyone in room.</Dialog.Description></Dialog.Header>
+        <form onsubmit={create} class="flex flex-col gap-4">
+          <label class="flex flex-col gap-1.5"><span class="text-sm font-medium text-fg-strong">Room name <span class="font-normal text-fg">(optional)</span></span><Input class="h-11" bind:value={roomName} maxlength="64" placeholder="Untitled room" disabled={creating} /></label>
+          {#if error}<p class="text-sm text-error" role="alert">{error}</p>{/if}
+          <Dialog.Footer><Dialog.Close>{#snippet child({ props })}<Button variant="outline" class="h-11" {...props}>Cancel</Button>{/snippet}</Dialog.Close><Button class="h-11" type="submit" disabled={creating}>{creating ? "Creating…" : "Create room"}</Button></Dialog.Footer>
+        </form>
+      </Dialog.Content>
     </Dialog.Root>
   </section>
 
@@ -83,8 +102,8 @@
           <button class="flex min-h-11 w-full items-center justify-between gap-4 rounded-md border border-border bg-card p-3 text-left transition-colors duration-fast hover:bg-input focus-visible:outline-2 focus-visible:outline-secondary focus-visible:outline-offset-2"
             onclick={() => go(`/room/${room.id}`)}>
             <span class="flex min-w-0 items-center gap-3">
-              {#if room.kind === "audio"}<Music2 class="shrink-0 text-secondary" />{:else}<Clapperboard class="shrink-0 text-secondary" />{/if}
-              <span class="min-w-0"><span class="block truncate font-medium text-fg-strong">{room.name}</span><span class="block truncate text-sm">{room.mediaTitle} · {room.kind}</span></span>
+               {#if room.kind === "audio"}<Music2 class="shrink-0 text-secondary" />{:else}<Clapperboard class="shrink-0 text-secondary" />{/if}
+               <span class="min-w-0"><span class="block truncate font-medium text-fg-strong">{room.name}</span><span class="block truncate text-sm">{room.mediaTitle ? `${room.mediaTitle} · ${room.kind}` : "No media selected"}</span></span>
             </span>
             <span class="eyebrow shrink-0"><DoorOpen /> {room.participants} watching</span>
           </button>

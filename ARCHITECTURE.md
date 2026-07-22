@@ -115,10 +115,11 @@ Room                                    // all fields guarded by Room.mu
   id          string                    // opaque, crypto-random 16 hex chars
   name        string
   ownerID     int64                     // account user id; isHost := conn.userID == ownerID, computed live
-  mediaID     int64                     // fixed at creation (M1)
-  kind        string                    // 'video' | 'audio', copied from media row
+  mediaID     int64                     // 0 until host selects a ready library item
+  kind        string                    // 'video' | 'audio', empty without media
+  mediaChange {mediaID,title,kind,waitingParticipantKeys} | nil
   joinToken   string                    // ≥128-bit crypto-random hex; regenerate replaces it
-  watch       WatchState                // position, rate, paused, updatedAt — the V1 machine, unchanged
+  watch       WatchState | nil          // created after media selection; position, rate, paused, updatedAt
   chat        [200]ChatMsg ring         // drop-oldest (FR-25)
    clients     set[*client]              // live WS connections; presence derives from this
    reconnecting map[participant]*timer   // final dropped connection remains visible for 10 s
@@ -171,12 +172,12 @@ Pipeline decision tree at `finish` (one worker, `nice -n 19`): probe → **no vi
 | Method & path | Req → Resp | Codes | Auth |
 |---|---|---|---|
 | GET `/api/rooms` | → `[{id,name,mediaId,mediaTitle,kind,participants}]` (live rooms from hub) | 200 | acct |
-| POST `/api/rooms` | `{mediaId, name?}` → `{id, joinToken}`; name defaults to media title; media must be `ready`; creates room **and** starts its watch activity | 201, 400, 404 media, 429 room limit | acct |
+| POST `/api/rooms` | `{name?,mediaId?}` → `{id, joinToken}`; creates media-free room when `mediaId` omitted. Legacy `mediaId` remains accepted only for existing clients; it must be `ready`. | 201, 400, 404 media, 429 room limit | acct |
 | DELETE `/api/rooms/{id}` | → `{}` — immediate teardown, broadcasts `room_closed` | 200, 403 not host, 404 | acct (host check inside) |
 | GET `/api/rooms/{id}/token` | → `{joinToken}` — retrieves the current invite for a returning host | 200, 403 not host, 404 | acct (host) |
 | POST `/api/rooms/{id}/token` | `{}` → `{joinToken}` — regenerate; old token dead for new joins, connected guests persist | 200, 403, 404 | acct (host) |
 | POST `/api/rooms/join` | `{token, name}` → `{roomId}` + guest cookie (`together_guest`, HttpOnly, session-scoped). Re-join with a live guest cookie for that room skips name minting and returns the same identity. | 200; 404 dead/unknown token (same body as unknown room — no oracle); 400 bad name; 409 room full | **none — public (with the peek route below, the only unauthenticated surface besides login/register)** |
-| GET `/api/rooms/{id}/meta` | → `{name, kind, media:{id,title,sizeBytes,duration}, subtitles:[{id,label}]}` — serves the acquisition panel's size check (FR-11); S6's pre-join room name comes from the peek route below | 200, 404 | room |
+| GET `/api/rooms/{id}/meta` | → `{name, kind, media:{id,title,sizeBytes,duration}|null, subtitles:[{id,label}]}` — serves the acquisition panel's size check after media selection; S6's pre-join room name comes from the peek route below | 200, 404 | room |
 | GET `/api/rooms/join/{token}` | → `{roomName}` (pre-join peek for S6 header) | 200, 404 | none |
 
 Room ids and join tokens come from the same crypto-random generator as session tokens. Current tokens are indexed under `Hub.mu`; create, regeneration, and teardown update the index, while stale and unknown probes keep the same 404 body. Unguessability protects the public token surface; account-entry throttling is separate.
@@ -201,7 +202,9 @@ JSON frames. Deltas from V1 marked ●.
 |---|---|---|
 | `chat` | `{body}` | ≤2000 chars, non-empty |
 | `intent` | `{action:"play"\|"pause"\|"seek", position?}` | any participant; applied via `watch.Apply` under room mutex |
-| `start` / `end` | `{mediaId}` / `{}` | `start.mediaId` must equal the room's immutable `mediaID`; mismatch is a recoverable `error` with unchanged activity. Room creation already starts the activity; frames remain for restart. |
+| `start` / `end` | `{mediaId}` / `{}` | `start.mediaId` must equal currently selected `mediaID`; no media or mismatch is a recoverable `error` with unchanged activity. |
+| `media_change` | `{mediaId}` | host only; proposes ready library media. If no other participant is present, applies immediately. |
+| `media_change_confirm` | `{}` | participant approves pending host proposal; one vote per account/guest identity, not tab. Switch applies only after all identities present at proposal time approve. |
 | `ping` | `{t}` | every 10 s |
 | ● `status` | `{state:"downloading"\|"file_ready"\|"in_sync"}` | presence-only; never enters the `intent`/`watch.go` path |
 | `leave` | `{}` | deliberate tab leave; only a participant's final live tab pauses active playback |
@@ -211,6 +214,8 @@ JSON frames. Deltas from V1 marked ●.
 | Type | Payload | Notes |
 |---|---|---|
 | ● `hello` | `{you:{name,isHost,isGuest}, users:[Presence], activity, chat:[ChatMsg], room:{name,kind,mediaId}}` | full stateless recovery on join/reconnect (FR-20); no event replay |
+| `media_change_requested` | `{media:{id,title,kind}}` | sent to each non-host participant whose approval is required |
+| `media_changed` | `{room:{name,kind,mediaId}}` | unanimous proposal applied; clients reload metadata and discard old local source |
 | ● `presence` | `{users:[{name,isHost,isGuest,status}]}` | server-owned; `reconnecting` remains visible for 10 s after a final socket drop |
 | `user_left` | `{}` | broadcast after an explicit final-tab leave; active playback is paused first |
 | `user_rejoined` | `{}` | broadcast to other clients when a reconnecting participant returns inside the 10 s grace |
