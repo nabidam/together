@@ -449,11 +449,22 @@ func (h *Hub) dispatch(r *Room, c *client, m inMsg) {
 			}
 			return
 		}
-		st := NewWatch(m.MediaID, nowMs())
+		started := false
 		r.withLock(func() {
+			if m.MediaID != r.mediaID {
+				return
+			}
+			st := NewWatch(m.MediaID, nowMs())
 			r.watch = &st
+			started = true
 			r.broadcast(marshal(map[string]any{"type": "activity", "activity": r.activityJSON()}))
 		})
+		if !started {
+			select {
+			case c.send <- marshal(map[string]any{"type": "error", "body": "media does not match room"}):
+			default:
+			}
+		}
 
 	case "end":
 		r.withLock(func() {

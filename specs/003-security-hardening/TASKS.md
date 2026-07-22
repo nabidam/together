@@ -586,3 +586,5 @@ task = 9
 **Estimated difficulty:** Medium release gate.
 
 **Context pack:** release script/build artifacts, complete security journey, all task evidence, SPEC kernel journey, PRD NFR measurements, living architecture/operations docs. No implementation edits.
+
+> **DONE** working tree verified 2026-07-22 — Evidence: `specs/003-security-hardening/evidence/task-10.txt`. Linux amd64/arm64 archives checksum-verified; extracted amd64 binary passed loopback health; two production security journeys passed; injected failure cleaned up; independent re-review passed after two race fixes.

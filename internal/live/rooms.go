@@ -254,7 +254,7 @@ func (h *Hub) joinRoom(w http.ResponseWriter, r *http.Request) {
 
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.rooms[rm.id] != rm {
+	if h.rooms[rm.id] != rm || h.tokens[in.Token] != rm {
 		writeErr(w, 404, "room not found")
 		return
 	}
