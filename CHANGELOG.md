@@ -2,7 +2,14 @@
 
 All notable changes to Together are documented here.
 
-## [0.2.0] - Unreleased
+## [0.2.1] - Unreleased
+
+### Fixed
+
+- Reject guest joins using a room link regenerated during the join request.
+- Prevent stale playback starts from racing a confirmed media change.
+
+## [0.2.0] - 2026-07-22
 
 ### Added
 
