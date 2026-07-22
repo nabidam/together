@@ -6,11 +6,10 @@
   import { Input } from "./ui/input/index.js";
   import { Skeleton } from "./ui/skeleton/index.js";
 
-  let { me, oncreate } = $props();
+  let { me, onselect, title = "Choose media", description = "Choose a ready library item for this room.", action = "Use media" } = $props();
   let media = $state([]);
   let mediaState = $state("loading");
   let selectedId = $state(null);
-  let name = $state("");
   let filter = $state("");
   let error = $state("");
   let creating = $state(false);
@@ -40,13 +39,13 @@
 
   $effect(() => { load(); });
 
-  async function create(event) {
+  async function select(event) {
     event.preventDefault();
     if (!selectedMedia) return;
     creating = true;
     error = "";
     try {
-      await oncreate({ mediaId: selectedMedia.id, name: name.trim() || selectedMedia.title });
+      await onselect(selectedMedia);
     } catch (err) {
       error = err.message;
     } finally {
@@ -57,14 +56,10 @@
 
 <Dialog.Content class="max-w-xl" showCloseButton={!creating}>
   <Dialog.Header>
-    <Dialog.Title>Create room</Dialog.Title>
-    <Dialog.Description>Choose a ready library item to watch together.</Dialog.Description>
+    <Dialog.Title>{title}</Dialog.Title>
+    <Dialog.Description>{description}</Dialog.Description>
   </Dialog.Header>
-  <form onsubmit={create} class="flex flex-col gap-4">
-    <label class="flex flex-col gap-1.5">
-      <span class="text-sm font-medium text-fg-strong">Room name <span class="font-normal text-fg">(optional)</span></span>
-      <Input class="h-11" bind:value={name} maxlength="64" disabled={creating} placeholder={selectedMedia?.title || "Defaults to media title"} />
-    </label>
+  <form onsubmit={select} class="flex flex-col gap-4">
     <div class="flex items-end justify-between gap-3">
       <span class="text-sm font-medium text-fg-strong">Pick media</span>
       <label class="w-48"><span class="sr-only">Filter media</span><Input class="h-11" bind:value={filter} placeholder="Filter media" disabled={creating} /></label>
@@ -93,7 +88,7 @@
       <Dialog.Close>
         {#snippet child({ props })}<Button variant="outline" class="h-11" disabled={creating} {...props}>Cancel</Button>{/snippet}
       </Dialog.Close>
-      <Button class="h-11" type="submit" disabled={!selectedMedia || creating || mediaState !== "ready"}>{creating ? "Creating…" : "Create"}</Button>
+      <Button class="h-11" type="submit" disabled={!selectedMedia || creating || mediaState !== "ready"}>{creating ? "Saving…" : action}</Button>
     </Dialog.Footer>
   </form>
 </Dialog.Content>

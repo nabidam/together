@@ -163,7 +163,7 @@ func (h *Hub) RequireRoomMedia(next http.HandlerFunc) http.HandlerFunc {
 		}
 		rm.mu.Lock()
 		defer rm.mu.Unlock()
-		return rm.mediaID == mediaID
+		return rm.mediaID != 0 && rm.mediaID == mediaID
 	})
 }
 
@@ -317,6 +317,10 @@ func (h *Hub) roomMeta(w http.ResponseWriter, r *http.Request) {
 	rm.mu.Lock()
 	name, kind, mediaID := rm.name, rm.kind, rm.mediaID
 	rm.mu.Unlock()
+	if mediaID == 0 {
+		writeJSON(w, 200, map[string]any{"name": name, "kind": kind, "media": nil, "subtitles": []subtitleMeta{}})
+		return
+	}
 
 	media := mediaMeta{ID: mediaID}
 	err := h.db.QueryRow(`SELECT title, coalesce(size_bytes,0), coalesce(duration,0) FROM media WHERE id=?`, mediaID).
@@ -380,14 +384,20 @@ func (h *Hub) createRoom(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var kind, title, status string
-	err := h.db.QueryRow(`SELECT kind, title, status FROM media WHERE id=?`, in.MediaID).Scan(&kind, &title, &status)
-	if err != nil || status != "ready" {
-		writeErr(w, 404, "media not found or not ready")
-		return
+	var kind, title string
+	if in.MediaID != 0 {
+		var ok bool
+		kind, title, ok = h.readyMedia(in.MediaID)
+		if !ok {
+			writeErr(w, 404, "media not found or not ready")
+			return
+		}
 	}
 	if name == "" {
 		name = title
+		if name == "" {
+			name = "Untitled room"
+		}
 	}
 
 	h.mu.Lock()
@@ -404,19 +414,24 @@ func (h *Hub) createRoom(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	st := NewWatch(in.MediaID, nowMs())
 	rm := &Room{
-		id:           randHex(8),
-		name:         name,
-		ownerID:      ownerID,
-		mediaID:      in.MediaID,
-		mediaTitle:   title,
-		kind:         kind,
-		joinToken:    randHex(16),
-		watch:        &st, // creating a room starts its watch activity (§4.3)
+		id:         randHex(8),
+		name:       name,
+		ownerID:    ownerID,
+		mediaID:    in.MediaID,
+		mediaTitle: title,
+		kind:       kind,
+		joinToken:  randHex(16),
+		// Playback starts only after media is selected.
 		clients:      map[*client]bool{},
 		reconnecting: map[string]*reconnectingClient{},
 		chat:         []ChatMsg{},
+	}
+	// mediaId remains accepted for existing API clients. New clients omit it
+	// and choose media from inside the room.
+	if in.MediaID != 0 {
+		st := NewWatch(in.MediaID, nowMs())
+		rm.watch = &st
 	}
 	// Creation is an empty state too: a room with no first connection must
 	// expire instead of reserving capacity indefinitely.

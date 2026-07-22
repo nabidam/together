@@ -10,6 +10,7 @@
   import RoomClosed from "../components/RoomClosed.svelte";
   import RoomStrip from "../components/RoomStrip.svelte";
   import SidePanel from "../components/SidePanel.svelte";
+  import MediaPickerDialog from "../components/MediaPickerDialog.svelte";
   import { Button } from "../components/ui/button/index.js";
   import { Slider } from "../components/ui/slider/index.js";
   import * as Dialog from "../components/ui/dialog/index.js";
@@ -21,7 +22,7 @@
   let users = $state([]);
   let activity = $state(null);
   let room = $state(null);
-  let media = $state(null);
+  let media = $state(undefined);
   let connection = $state("connecting");
   let closed = $state(false);
   let loadError = $state("");
@@ -35,6 +36,9 @@
   let toastTimer;
   let myName = $state("");
   let playConfirmOpen = $state(false);
+  let mediaPickerOpen = $state(false);
+  let mediaChangeOpen = $state(false);
+  let proposedMedia = $state(null);
 
   function showToast(message) {
     toast = message;
@@ -48,7 +52,7 @@
     users = [];
     activity = null;
     room = null;
-    media = null;
+    media = undefined;
     revokeObjectURL(untrack(() => playbackSource));
     playbackSource = "";
     isHost = false;
@@ -63,7 +67,7 @@
     get(`/api/rooms/${roomId}/meta`)
       .then((meta) => {
         if (!active) return;
-        media = { ...meta.media, subtitles: meta.subtitles ?? [] };
+        media = meta.media ? { ...meta.media, subtitles: meta.subtitles ?? [] } : null;
       })
       .catch(() => {
         if (active) loadError = "Couldn't load this room.";
@@ -89,6 +93,20 @@
           const action = message.action === "seek" ? "changed position" : message.action === "pause" ? "paused playback" : "started playback";
           showToast(`${actor} ${action}.`);
         }
+      } else if (message.type === "media_change_requested") {
+        proposedMedia = message.media;
+        mediaChangeOpen = true;
+      } else if (message.type === "media_changed") {
+        room = message.room;
+        activity = null;
+        mediaChangeOpen = false;
+        proposedMedia = null;
+        revokeObjectURL(playbackSource);
+        playbackSource = "";
+        get(`/api/rooms/${roomId}/meta`).then((meta) => {
+          if (active) media = meta.media ? { ...meta.media, subtitles: meta.subtitles ?? [] } : null;
+        });
+        showToast("Media changed.");
       } else if (message.type === "user_left") {
         showToast("User Left.");
       } else if (message.type === "user_rejoined") {
@@ -129,10 +147,15 @@
     playbackSource = source;
   }
 
-  const ready = $derived(room !== null && media !== null);
+  const ready = $derived(room !== null && media !== undefined);
   const disconnected = $derived(connection !== "connected");
   const playbackActive = $derived(Boolean(playbackSource && activity));
   const isAudio = $derived(room?.kind === "audio");
+
+  function selectMedia(selected) {
+    mediaPickerOpen = false;
+    sock?.send({ type: "media_change", mediaId: selected.id });
+  }
 
   $effect(() => {
     if (!activity?.state) {
@@ -194,7 +217,7 @@
     <div class="fixed right-4 bottom-4 z-50 rounded-md border border-border bg-card px-4 py-3 text-sm text-fg-strong shadow-lg" role="status">{toast}</div>
   {/if}
   <main class="h-dvh flex flex-col">
-    <RoomStrip {me} {room} {media} {roomId} {joinToken} {isHost} {playbackActive} resumeVisible={isHost && activity?.state.paused} onleave={leave} onresume={requestPlay}
+    <RoomStrip {me} {room} {media} {roomId} {joinToken} {isHost} {playbackActive} resumeVisible={isHost && activity?.state.paused} onleave={leave} onresume={requestPlay} onselectmedia={() => (mediaPickerOpen = true)}
       onregenerated={(token) => (joinToken = token)} onended={() => (closed = true)} />
     {#if connection === "reconnecting"}
       <div class="border-b border-info bg-info/10 px-4 py-2 text-sm text-fg" role="status">Reconnecting…</div>
@@ -208,7 +231,9 @@
       <div class="flex-1 min-h-0 flex flex-col md:flex-row relative">
         <section class="flex-1 min-h-0 flex flex-col bg-void">
           <div class="flex-1 min-h-0 relative">
-            {#if playbackSource && activity}
+            {#if !media}
+              <div class="h-full grid place-items-center p-6 text-center"><div class="flex flex-col items-center gap-4"><p class="text-fg">No media selected yet.</p>{#if isHost}<Button class="h-11" onclick={() => (mediaPickerOpen = true)}>Choose media</Button>{:else}<p class="text-sm">Waiting for host to choose media.</p>{/if}</div></div>
+            {:else if playbackSource && activity}
               {#if isAudio}
                 <AudioPlayer {activity} {sock} {media} source={playbackSource} />
               {:else}
@@ -224,8 +249,8 @@
             <Button variant="ghost" size="icon-lg" disabled={disconnected || !activity} onclick={togglePlayback} aria-label={activity?.state.paused ? "Play" : "Pause"}>
               {#if activity?.state.paused}<Play />{:else}<Pause />{/if}
             </Button>
-            <Slider value={[scrubPosition]} min={0} max={media.duration ?? 0} step={0.1} disabled={disconnected || !activity} onValueCommit={(value) => intent("seek", value[0])} aria-label="Seek playback" />
-            <span class="hidden sm:inline whitespace-nowrap font-mono text-sm text-fg-strong">{timecode(scrubPosition)} <span class="text-fg/50">/ {timecode(media.duration)}</span></span>
+            <Slider value={[scrubPosition]} min={0} max={media?.duration ?? 0} step={0.1} disabled={disconnected || !activity} onValueCommit={(value) => intent("seek", value[0])} aria-label="Seek playback" />
+            <span class="hidden sm:inline whitespace-nowrap font-mono text-sm text-fg-strong">{timecode(scrubPosition)} <span class="text-fg/50">/ {timecode(media?.duration)}</span></span>
             {#if !isAudio}
               <Button variant="ghost" size="icon-lg" disabled={disconnected || !activity} onclick={toggleCaptions} aria-label="Toggle captions"><Captions /></Button>
               <Button variant="ghost" size="icon-lg" onclick={toggleFullscreen} aria-label="Fullscreen"><Maximize /></Button>
@@ -246,6 +271,15 @@
         <Dialog.Close>{#snippet child({ props })}<Button variant="outline" class="h-11" {...props}>Wait</Button>{/snippet}</Dialog.Close>
         <Button class="h-11" onclick={() => { playConfirmOpen = false; intent("play"); }}>Play anyway</Button>
       </Dialog.Footer>
+    </Dialog.Content>
+  </Dialog.Root>
+  <Dialog.Root bind:open={mediaPickerOpen}>
+    <MediaPickerDialog {me} onselect={selectMedia} title={media ? "Change media" : "Choose media"} description={media ? "Everyone in this room must confirm before media changes." : "Choose a ready library item for this room."} action={media ? "Request change" : "Choose media"} />
+  </Dialog.Root>
+  <Dialog.Root bind:open={mediaChangeOpen}>
+    <Dialog.Content>
+      <Dialog.Header><Dialog.Title>Change media?</Dialog.Title><Dialog.Description>Host wants to switch to {proposedMedia?.title}. Confirm to continue. Playback will reset.</Dialog.Description></Dialog.Header>
+      <Dialog.Footer><Button class="h-11" onclick={() => { mediaChangeOpen = false; sock?.send({ type: "media_change_confirm" }); }}>Confirm change</Button></Dialog.Footer>
     </Dialog.Content>
   </Dialog.Root>
 {/if}

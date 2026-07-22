@@ -15,6 +15,11 @@
   let file = $state(null), subtitle = $state(null);
   let progress = $state(null), error = $state("");
 
+  function selectFile(event) {
+    file = event.target.files[0] ?? null;
+    if (file && !title.trim()) title = file.name.replace(/\.[^.]+$/, "");
+  }
+
   async function load() {
     media = await get("/api/media");
     invites = await get("/api/admin/invites");
@@ -38,6 +43,7 @@
 
   const fmtGB = (b) => (b / 1e9).toFixed(2) + " GB";
   const bar = (p) => "#".repeat(Math.round(p * 20)).padEnd(20, "-");
+  const totalBytes = $derived(media.reduce((total, item) => total + (item.sizeBytes || 0), 0));
 </script>
 
 <main class="min-h-dvh max-w-3xl mx-auto p-6 flex flex-col gap-6">
@@ -54,7 +60,7 @@
     <form onsubmit={submit} class="flex flex-col gap-3">
       <Input class="h-11" placeholder="Title" bind:value={title} required />
       <label class="flex flex-col gap-1 text-sm font-medium">Media file (.mp4 / .mkv / audio)
-        <Input class="h-auto py-2" type="file" required onchange={(e) => (file = e.target.files[0])} />
+         <Input class="h-auto py-2" type="file" required onchange={selectFile} />
       </label>
       <label class="flex flex-col gap-1 text-sm font-medium">Subtitle (.srt, optional)
         <Input class="h-auto py-2" type="file" accept=".srt,.vtt,.ass" onchange={(e) => (subtitle = e.target.files[0])} />
@@ -70,7 +76,7 @@
 
   <section class="border border-border bg-card p-6 flex flex-col gap-3">
     <div class="flex items-center justify-between">
-      <span class="eyebrow">// library</span>
+       <span class="eyebrow">// library · {fmtGB(totalBytes)} used</span>
       <Button variant="ghost" size="icon-lg" onclick={load} aria-label="Refresh"><RefreshCw /></Button>
     </div>
     <Table>

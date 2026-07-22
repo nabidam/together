@@ -4,7 +4,7 @@
   import * as AlertDialog from "./ui/alert-dialog/index.js";
   import RoomMenu from "./RoomMenu.svelte";
 
-  let { me = null, room, media, roomId, joinToken = "", isHost = false, playbackActive = false, resumeVisible = false, onleave = () => {}, onresume = () => {}, onregenerated = () => {}, onended = () => {} } = $props();
+  let { me = null, room, media, roomId, joinToken = "", isHost = false, playbackActive = false, resumeVisible = false, onleave = () => {}, onresume = () => {}, onselectmedia = () => {}, onregenerated = () => {}, onended = () => {} } = $props();
   let leaveOpen = $state(false);
 
   function leave() {
@@ -21,6 +21,7 @@
     </div>
     {#if isHost}
       {#if resumeVisible}<Button variant="outline" class="h-11" onclick={onresume}><Play />Resume</Button>{/if}
+      <Button variant="ghost" class="h-11" onclick={onselectmedia}>Change media</Button>
       <span class="eyebrow rounded-md border border-primary px-2 py-1 text-primary">Host</span>
       <RoomMenu {roomId} {joinToken} {onregenerated} {onended} />
     {/if}
