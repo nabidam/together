@@ -12,6 +12,8 @@
   import SidePanel from "../components/SidePanel.svelte";
   import { Button } from "../components/ui/button/index.js";
   import { Slider } from "../components/ui/slider/index.js";
+  import * as Dialog from "../components/ui/dialog/index.js";
+  import { go } from "../lib/router.svelte.js";
   import { Captions, LoaderCircle, Maximize, PanelRightClose, PanelRightOpen, Pause, Play } from "lucide-svelte";
 
   let { me = null, roomId } = $props();
@@ -29,6 +31,16 @@
   let joinToken = $state("");
   let panelOpen = $state(false);
   let scrubPosition = $state(0);
+  let toast = $state("");
+  let toastTimer;
+  let myName = $state("");
+  let playConfirmOpen = $state(false);
+
+  function showToast(message) {
+    toast = message;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => (toast = ""), 3000);
+  }
 
   $effect(() => {
     let active = true;
@@ -44,6 +56,9 @@
     closed = false;
     loadError = "";
     connection = "connecting";
+    toast = "";
+    myName = "";
+    clearTimeout(toastTimer);
 
     get(`/api/rooms/${roomId}/meta`)
       .then((meta) => {
@@ -58,6 +73,7 @@
       if (!active) return;
       if (message.type === "hello") {
         room = message.room;
+        myName = message.you.name;
         isHost = message.you.isHost;
         users = message.users;
         activity = message.activity;
@@ -68,6 +84,17 @@
         messages = [...messages, message];
       } else if (message.type === "activity") {
         activity = message.activity;
+        if (message.by && message.action) {
+          const actor = message.by === myName ? "You" : message.by;
+          const action = message.action === "seek" ? "changed position" : message.action === "pause" ? "paused playback" : "started playback";
+          showToast(`${actor} ${action}.`);
+        }
+      } else if (message.type === "user_left") {
+        showToast("User Left.");
+      } else if (message.type === "user_rejoined") {
+        showToast("Partner rejoined.");
+      } else if (message.type === "left") {
+        go("/");
       } else if (message.type === "room_closed") {
         closed = true;
         sock.close();
@@ -79,6 +106,7 @@
     return () => {
       active = false;
       sock?.close();
+      clearTimeout(toastTimer);
       revokeObjectURL(untrack(() => playbackSource));
     };
   });
@@ -128,6 +156,17 @@
   });
 
   const intent = (action, position = 0) => sock?.send({ type: "intent", action, position });
+  const leave = () => {
+    if (!sock?.send({ type: "leave" })) go("/");
+  };
+  const requestPlay = () => {
+    if (isHost && users.some((user) => user.status === "downloading")) {
+      playConfirmOpen = true;
+      return;
+    }
+    intent("play");
+  };
+  const togglePlayback = () => activity?.state.paused ? requestPlay() : intent("pause");
   const timecode = (seconds) => {
     const value = Math.max(0, Math.floor(seconds ?? 0));
     const hours = String(Math.floor(value / 3600)).padStart(2, "0");
@@ -151,8 +190,11 @@
 {#if closed}
   <RoomClosed accountUser={Boolean(me)} />
 {:else}
+  {#if toast}
+    <div class="fixed right-4 bottom-4 z-50 rounded-md border border-border bg-card px-4 py-3 text-sm text-fg-strong shadow-lg" role="status">{toast}</div>
+  {/if}
   <main class="h-dvh flex flex-col">
-    <RoomStrip {me} {room} {media} {roomId} {joinToken} {isHost} {playbackActive}
+    <RoomStrip {me} {room} {media} {roomId} {joinToken} {isHost} {playbackActive} resumeVisible={isHost && activity?.state.paused} onleave={leave} onresume={requestPlay}
       onregenerated={(token) => (joinToken = token)} onended={() => (closed = true)} />
     {#if connection === "reconnecting"}
       <div class="border-b border-info bg-info/10 px-4 py-2 text-sm text-fg" role="status">Reconnecting…</div>
@@ -179,7 +221,7 @@
             {/if}
           </div>
           <div class="min-h-16 shrink-0 border-t border-border bg-void px-3 py-2 flex items-center gap-2">
-            <Button variant="ghost" size="icon-lg" disabled={disconnected || !activity} onclick={() => intent(activity?.state.paused ? "play" : "pause")} aria-label={activity?.state.paused ? "Play" : "Pause"}>
+            <Button variant="ghost" size="icon-lg" disabled={disconnected || !activity} onclick={togglePlayback} aria-label={activity?.state.paused ? "Play" : "Pause"}>
               {#if activity?.state.paused}<Play />{:else}<Pause />{/if}
             </Button>
             <Slider value={[scrubPosition]} min={0} max={media.duration ?? 0} step={0.1} disabled={disconnected || !activity} onValueCommit={(value) => intent("seek", value[0])} aria-label="Seek playback" />
@@ -197,4 +239,13 @@
       </div>
     {/if}
   </main>
+  <Dialog.Root bind:open={playConfirmOpen}>
+    <Dialog.Content>
+      <Dialog.Header><Dialog.Title>Partner still downloading</Dialog.Title><Dialog.Description>Start playback anyway? They will sync when their file is ready.</Dialog.Description></Dialog.Header>
+      <Dialog.Footer>
+        <Dialog.Close>{#snippet child({ props })}<Button variant="outline" class="h-11" {...props}>Wait</Button>{/snippet}</Dialog.Close>
+        <Button class="h-11" onclick={() => { playConfirmOpen = false; intent("play"); }}>Play anyway</Button>
+      </Dialog.Footer>
+    </Dialog.Content>
+  </Dialog.Root>
 {/if}

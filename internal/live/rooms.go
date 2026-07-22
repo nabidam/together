@@ -406,16 +406,17 @@ func (h *Hub) createRoom(w http.ResponseWriter, r *http.Request) {
 
 	st := NewWatch(in.MediaID, nowMs())
 	rm := &Room{
-		id:         randHex(8),
-		name:       name,
-		ownerID:    ownerID,
-		mediaID:    in.MediaID,
-		mediaTitle: title,
-		kind:       kind,
-		joinToken:  randHex(16),
-		watch:      &st, // creating a room starts its watch activity (§4.3)
-		clients:    map[*client]bool{},
-		chat:       []ChatMsg{},
+		id:           randHex(8),
+		name:         name,
+		ownerID:      ownerID,
+		mediaID:      in.MediaID,
+		mediaTitle:   title,
+		kind:         kind,
+		joinToken:    randHex(16),
+		watch:        &st, // creating a room starts its watch activity (§4.3)
+		clients:      map[*client]bool{},
+		reconnecting: map[string]*reconnectingClient{},
+		chat:         []ChatMsg{},
 	}
 	// Creation is an empty state too: a room with no first connection must
 	// expire instead of reserving capacity indefinitely.
@@ -526,6 +527,9 @@ func (h *Hub) teardown(rm *Room) {
 	}
 	if rm.emptyTimer != nil {
 		rm.emptyTimer.Stop()
+	}
+	for _, reconnecting := range rm.reconnecting {
+		reconnecting.timer.Stop()
 	}
 	rm.mu.Unlock()
 

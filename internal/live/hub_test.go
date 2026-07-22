@@ -170,6 +170,101 @@ func TestActivitySync(t *testing.T) {
 	if st["paused"] != false {
 		t.Fatalf("play did not sync: %+v", st)
 	}
+	if f["by"] != "bob" || f["action"] != "play" {
+		t.Fatalf("activity missing actor attribution: %+v", f)
+	}
+}
+
+func TestExplicitFinalLeavePausesPlaybackAndNotifiesSurvivors(t *testing.T) {
+	ts, _, _, alice, bob := newStack(t)
+	room, _ := createRoom(t, ts, alice, 1, "")
+	a := dial(t, ts, room, alice)
+	read(t, a) // hello
+	b := dial(t, ts, room, bob)
+	read(t, b) // hello
+	waitFor(t, a, "presence")
+
+	send(t, b, frame{"type": "intent", "action": "play"})
+	if f := waitFor(t, a, "activity"); f["activity"].(map[string]any)["state"].(map[string]any)["paused"] != false {
+		t.Fatalf("play did not sync: %+v", f)
+	}
+	send(t, b, frame{"type": "leave"})
+
+	f := waitFor(t, a, "activity")
+	if f["activity"].(map[string]any)["state"].(map[string]any)["paused"] != true {
+		t.Fatalf("leave did not pause playback: %+v", f)
+	}
+	if f := waitFor(t, a, "user_left"); f == nil {
+		t.Fatal("survivor did not receive user_left")
+	}
+}
+
+func TestSocketDropKeepsPlaybackRunningAndShowsReconnecting(t *testing.T) {
+	ts, hub, _, alice, bob := newStack(t)
+	room, _ := createRoom(t, ts, alice, 1, "")
+	a := dial(t, ts, room, alice)
+	read(t, a)
+	b := dial(t, ts, room, bob)
+	read(t, b)
+	waitFor(t, a, "presence")
+
+	send(t, b, frame{"type": "intent", "action": "play"})
+	waitFor(t, a, "activity")
+	b.CloseNow()
+
+	presence := waitFor(t, a, "presence")
+	rm, ok := hub.getRoom(room)
+	if !ok {
+		t.Fatal("room disappeared")
+	}
+	rm.mu.Lock()
+	paused := rm.watch.Paused
+	rm.mu.Unlock()
+	if paused {
+		t.Fatal("socket drop must not pause playback")
+	}
+	users := presence["users"].([]any)
+	for _, user := range users {
+		item := user.(map[string]any)
+		if item["name"] == "bob" && item["status"] == "reconnecting" {
+			reconnected := dial(t, ts, room, bob)
+			read(t, reconnected)
+			if f := waitFor(t, a, "user_rejoined"); f == nil {
+				t.Fatal("survivor did not receive user_rejoined")
+			}
+			return
+		}
+	}
+	t.Fatalf("dropped participant was not marked reconnecting: %+v", presence)
+}
+
+func TestSecondTabLeaveDoesNotPauseParticipant(t *testing.T) {
+	ts, hub, _, alice, _ := newStack(t)
+	room, _ := createRoom(t, ts, alice, 1, "")
+	first := dial(t, ts, room, alice)
+	read(t, first)
+	second := dial(t, ts, room, alice)
+	read(t, second)
+	waitFor(t, first, "presence") // first tab's own join
+	waitFor(t, first, "presence") // second tab's join
+
+	send(t, first, frame{"type": "intent", "action": "play"})
+	waitFor(t, second, "activity")
+	send(t, second, frame{"type": "leave"})
+
+	if presence := waitFor(t, first, "presence"); len(presence["users"].([]any)) != 1 {
+		t.Fatalf("one remaining tab should keep participant present: %+v", presence)
+	}
+	rm, ok := hub.getRoom(room)
+	if !ok {
+		t.Fatal("room disappeared")
+	}
+	rm.mu.Lock()
+	paused := rm.watch.Paused
+	rm.mu.Unlock()
+	if paused {
+		t.Fatal("leaving a second tab must not pause playback")
+	}
 }
 
 func TestWSStart_RejectsMediaOutsideRoomScope(t *testing.T) {

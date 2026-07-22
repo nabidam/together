@@ -149,7 +149,7 @@ The theater. Player dominates; everything else is subordinate or collapsible.
 
 Regions, top to bottom / start to end:
 
-1. **Room strip** (top, thin): Leave (back to S3 for account users; guests get "Leave" that just closes their session), room name + media title, host badge. **Host controls live here behind a single "Room" disclosure menu:** copy invite link, regenerate link (→ M3), end room (→ M2). Guests see only the room name.
+1. **Room strip** (top, thin): Leave is available to account users and guests; a confirmation explains that a final-tab leave pauses playback, then returns account users to S3 and guests to entry. Room name + media title, host badge. A host sees Resume while playback is paused. **Host controls live here behind a single "Room" disclosure menu:** copy invite link, regenerate link (→ M3), end room (→ M2). Guests see only the room name.
 2. **Player region** (dominant, ~80% width when panel open, 100% when collapsed): the `<video>` element once a local file is loaded and armed; the **acquisition panel** (§3.4) before that. Until first user gesture, an **arm overlay** sits on the player: big play glyph + "Click to enable playback" (browser autoplay policy). Subtitle track selectable via CC in transport.
 3. **Transport bar**: play/pause, scrub bar, position/duration, CC, fullscreen, panel toggle. All actions send intents — the UI reflects only the echoed server state (a click that doesn't round-trip visibly does nothing; that is correct, not a bug).
 4. **Side panel** (end, collapsible, remembers state): Participants block on top (short, fixed), Chat fills the rest. Collapse control on the panel edge.
@@ -158,7 +158,9 @@ Regions, top to bottom / start to end:
 
 - Eye goes first to the player region (or the acquisition panel occupying it).
 - **Loading (join):** brief full-region spinner until `hello` arrives.
-- **Error (WS lost):** thin reconnecting banner over the room strip ("Reconnecting…"); inputs stay visible but intents/chat are disabled until reconnected. On reconnect, state is restored silently (stateless `hello` recovery).
+- **Error (WS lost):** thin reconnecting banner over the room strip ("Reconnecting…"); inputs stay visible but intents/chat are disabled until reconnected. A participant whose final socket drops shows Reconnecting in the list for 10 seconds; playback continues. On return, one "Partner rejoined." toast appears and the host can Resume.
+- **Participant leaves:** an explicit final-tab Leave pauses active playback for remaining participants; one bottom-end toast reads "User Left.".
+- **Playback feedback:** server-confirmed play, pause, and seek actions show a single toast naming actor and action. If host starts playback while anyone is Downloading, confirmation explains that partner will sync when ready.
 - **Empty (chat):** plain "No messages yet." (no emoji in chrome).
 - **Mid-movie join:** identical layout; player armed-empty + own Downloading dot while the acquisition panel is up. No special casing.
 

@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"sync"
@@ -31,16 +32,17 @@ type Hub struct {
 
 // Room is ephemeral hub state. All mutable fields are guarded by Room.mu.
 type Room struct {
-	mu         sync.Mutex
-	id         string      // opaque, crypto-random 16 hex chars
-	name       string      // ≤64 chars
-	ownerID    int64       // account user id; isHost := conn.userID == ownerID, live
-	mediaID    int64       // fixed at creation
-	mediaTitle string      // copied from the media row at creation
-	kind       string      // 'video' | 'audio', copied from the media row
-	joinToken  string      // ≥128-bit crypto-random hex; regenerate replaces it
-	watch      *WatchState // nil = no active activity; started at creation
-	clients    map[*client]bool
+	mu           sync.Mutex
+	id           string      // opaque, crypto-random 16 hex chars
+	name         string      // ≤64 chars
+	ownerID      int64       // account user id; isHost := conn.userID == ownerID, live
+	mediaID      int64       // fixed at creation
+	mediaTitle   string      // copied from the media row at creation
+	kind         string      // 'video' | 'audio', copied from the media row
+	joinToken    string      // ≥128-bit crypto-random hex; regenerate replaces it
+	watch        *WatchState // nil = no active activity; started at creation
+	clients      map[*client]bool
+	reconnecting map[string]*reconnectingClient
 	// chat is an in-memory drop-oldest ring of the latest 200 messages
 	// (FR-25), oldest first. A plain slice capped by re-slicing on append is
 	// enough at this size — no circular-buffer indexing needed. Never
@@ -109,6 +111,11 @@ type Presence struct {
 	Status  string `json:"status"`
 }
 
+type reconnectingClient struct {
+	presence Presence
+	timer    *time.Timer
+}
+
 const chatRingCap = 200
 
 // appendChat drops the oldest entry once the ring exceeds chatRingCap.
@@ -125,6 +132,8 @@ type client struct {
 	name    string // display name: account username, or guest's post-suffix name
 	isGuest bool
 	guestID string // set for guest connections only
+	leaving bool
+	removed bool
 	status  string // downloading|file_ready|in_sync, client-reported, per-connection
 	send    chan []byte
 	cancel  func() // stops this connection's context; set in Handle
@@ -138,6 +147,13 @@ type client struct {
 // (never mutated), so reading it here needs no lock — matching isHost in
 // rooms.go, which does the same.
 func (c *client) isHostOf(r *Room) bool { return !c.isGuest && c.user.ID == r.ownerID }
+
+func (c *client) participantKey() string {
+	if c.isGuest {
+		return "guest:" + c.guestID
+	}
+	return fmt.Sprintf("account:%d", c.user.ID)
+}
 
 // NewHub builds a hub with idle as its TOGETHER_ROOM_IDLE (ARCHITECTURE §9):
 // how long an empty room (zero live WS connections) survives before its
@@ -176,6 +192,18 @@ func (r *Room) broadcast(b []byte) { // callers hold r.mu
 	}
 }
 
+func (r *Room) broadcastExcept(skip *client, b []byte) { // callers hold r.mu
+	for c := range r.clients {
+		if c == skip {
+			continue
+		}
+		select {
+		case c.send <- b:
+		default:
+		}
+	}
+}
+
 func (r *Room) activityJSON() any {
 	if r.watch == nil {
 		return nil
@@ -191,7 +219,36 @@ func (r *Room) presence() []Presence {
 	for c := range r.clients {
 		out = append(out, Presence{Name: c.name, IsHost: c.isHostOf(r), IsGuest: c.isGuest, Status: c.status})
 	}
+	for _, c := range r.reconnecting {
+		out = append(out, c.presence)
+	}
 	return out
+}
+
+func (r *Room) hasParticipant(key string) bool {
+	for c := range r.clients {
+		if c.participantKey() == key {
+			return true
+		}
+	}
+	return false
+}
+
+const reconnectGrace = 10 * time.Second
+
+func (r *Room) markReconnecting(c *client) { // caller holds r.mu
+	key := c.participantKey()
+	rc := &reconnectingClient{presence: Presence{Name: c.name, IsHost: c.isHostOf(r), IsGuest: c.isGuest, Status: "reconnecting"}}
+	rc.timer = time.AfterFunc(reconnectGrace, func() {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		if r.closed || r.reconnecting[key] != rc {
+			return
+		}
+		delete(r.reconnecting, key)
+		r.broadcast(marshal(map[string]any{"type": "presence", "users": r.presence()}))
+	})
+	r.reconnecting[key] = rc
 }
 
 type inMsg struct {
@@ -265,6 +322,11 @@ func (h *Hub) Handle(w http.ResponseWriter, req *http.Request) {
 		r.emptyTimer.Stop() // any join keeps the room alive (AC-5.3)
 	}
 	r.clients[c] = true
+	if reconnecting, ok := r.reconnecting[c.participantKey()]; ok {
+		reconnecting.timer.Stop()
+		delete(r.reconnecting, c.participantKey())
+		r.broadcastExcept(c, marshal(map[string]any{"type": "user_rejoined"}))
+	}
 	chatHistory := make([]ChatMsg, len(r.chat))
 	copy(chatHistory, r.chat) // oldest→newest, same order as the ring
 	c.send <- marshal(map[string]any{
@@ -280,18 +342,8 @@ func (h *Hub) Handle(w http.ResponseWriter, req *http.Request) {
 
 	defer func() {
 		r.mu.Lock()
-		delete(r.clients, c)
+		r.depart(c, h)
 		c.closeOnce.Do(func() { close(c.send) })
-		if !r.closed {
-			r.broadcast(marshal(map[string]any{"type": "presence", "users": r.presence()}))
-			if len(r.clients) == 0 {
-				if r.emptyTimer == nil {
-					r.emptyTimer = time.AfterFunc(h.idle, func() { h.fireEmpty(r) })
-				} else {
-					r.emptyTimer.Reset(h.idle)
-				}
-			}
-		}
 		r.mu.Unlock()
 	}()
 
@@ -347,6 +399,17 @@ func (h *Hub) dispatch(r *Room, c *client, m inMsg) {
 			r.broadcast(marshal(map[string]any{"type": "presence", "users": r.presence()}))
 		})
 
+	case "leave":
+		r.withLock(func() {
+			c.leaving = true
+			r.depart(c, h)
+			select {
+			case c.send <- marshal(map[string]any{"type": "left"}):
+			default:
+			}
+			c.closeOnce.Do(func() { close(c.send) })
+		})
+
 	case "start":
 		// A room is permanently scoped to the media selected at creation.
 		// Read the fixed id while holding the room lock so a mismatched start
@@ -387,10 +450,40 @@ func (h *Hub) dispatch(r *Room, c *client, m inMsg) {
 			if r.watch != nil {
 				if next, err := r.watch.Apply(m.Action, m.Position, nowMs()); err == nil {
 					r.watch = &next
-					r.broadcast(marshal(map[string]any{"type": "activity", "activity": r.activityJSON()}))
+					r.broadcast(marshal(map[string]any{"type": "activity", "activity": r.activityJSON(), "by": c.name, "action": m.Action}))
 				}
 			}
 		})
+	}
+}
+
+func (r *Room) depart(c *client, h *Hub) { // caller holds r.mu
+	if c.removed {
+		return
+	}
+	delete(r.clients, c)
+	c.removed = true
+	if r.closed {
+		return
+	}
+	key := c.participantKey()
+	if c.leaving && !r.hasParticipant(key) && len(r.clients) > 0 {
+		if r.watch != nil && !r.watch.Paused {
+			next, _ := r.watch.Apply("pause", 0, nowMs())
+			r.watch = &next
+			r.broadcast(marshal(map[string]any{"type": "activity", "activity": r.activityJSON()}))
+		}
+		r.broadcast(marshal(map[string]any{"type": "user_left"}))
+	} else if !c.leaving && !r.hasParticipant(key) {
+		r.markReconnecting(c)
+	}
+	r.broadcast(marshal(map[string]any{"type": "presence", "users": r.presence()}))
+	if len(r.clients) == 0 {
+		if r.emptyTimer == nil {
+			r.emptyTimer = time.AfterFunc(h.idle, func() { h.fireEmpty(r) })
+		} else {
+			r.emptyTimer.Reset(h.idle)
+		}
 	}
 }
 

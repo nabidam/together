@@ -51,7 +51,7 @@ In this sandbox, use `curl --noproxy '*'` and a free port (`TOGETHER_ADDR=:18080
 
 **Clock sync:** clients ping every 10 seconds; `pong.serverTime` and the `ws.js` EMA offset are unix milliseconds. Chat `createdAt` is unix seconds. Never mix the units.
 
-**Wire protocol:** JSON over `GET /ws/{roomId}`. Inbound frames are `chat`, `start`, `end`, `intent`, `ping`, and `status`; outbound frames are `hello`, `presence`, `chat`, `activity`, `room_closed`, `pong`, and `error`. Reconnect recovery is stateless: `hello` carries the current presence, activity, and chat ring. Frontend field names are hand-matched to `hub.go`; there is no schema codegen.
+**Wire protocol:** JSON over `GET /ws/{roomId}`. Inbound frames are `chat`, `start`, `end`, `intent`, `ping`, `status`, and `leave`; outbound frames are `hello`, `presence`, `chat`, `activity`, `left`, `user_left`, `user_rejoined`, `room_closed`, `pong`, and `error`. Reconnect recovery is stateless: `hello` carries the current presence, activity, and chat ring. Frontend field names are hand-matched to `hub.go`; there is no schema codegen.
 
 **Media pipeline:** admin uploads are resumable 8 MB chunks. `finish` enqueues a job; `pipeline.go` probes with ffprobe and either moves/remuxes supported media or transcodes once. It selects `video` or `audio` from the probe; audio never takes the libx264 path. Subtitles convert from `.srt` to `.vtt`. On boot the worker reclaims jobs stuck `running`. Stream/download routes use `http.ServeFile` as the opt-in fallback and retain range support.
 

@@ -34,7 +34,7 @@ web/                 Svelte SPA (see §6)
 
 Boundary rules:
 - Only `internal/db` writes DDL. Only `internal/live` touches room state; nothing else may hold a pointer into a room. Only `internal/media/pipeline.go` invokes ffmpeg/ffprobe.
-- `internal/api/rooms.go` (V1's DB-backed rooms handlers) is **deleted**; its route surface moves to `internal/live/rooms.go` because rooms are now hub state.
+- V1's DB-backed rooms handlers are **deleted**; their route surface lives in `internal/live/rooms.go` because rooms are now hub state.
 - `watch.go` stays pure (no I/O, no clock ownership — caller passes `now`). `web/src/lib/sync.js` is its line-for-line JS mirror; change both together, both stay tested.
 - Two session systems, one gate: `auth.Require` (account, SQLite-backed) for account surfaces; `live.RequireRoom` (account **or** in-memory guest session scoped to the target room) for room surfaces only: `/ws/{id}`, media download/stream/subs, room media-meta.
 
@@ -120,7 +120,8 @@ Room                                    // all fields guarded by Room.mu
   joinToken   string                    // ≥128-bit crypto-random hex; regenerate replaces it
   watch       WatchState                // position, rate, paused, updatedAt — the V1 machine, unchanged
   chat        [200]ChatMsg ring         // drop-oldest (FR-25)
-  clients     set[*client]              // live WS connections; presence derives from this
+   clients     set[*client]              // live WS connections; presence derives from this
+   reconnecting map[participant]*timer   // final dropped connection remains visible for 10 s
   emptyTimer  *time.Timer               // armed when clients hits 0; Stop() on join; fire → teardown
 
 GuestSession                            // dies at room teardown; survives socket drops (FR-5)
@@ -131,7 +132,7 @@ GuestSession                            // dies at room teardown; survives socke
 client (per WS connection)
   userID    int64  | 0                  // account connections
   guestID   string | ""                 // guest connections
-  name, status                          // status: downloading|file_ready|in_sync (client-reported)
+   name, status                          // status: downloading|file_ready|in_sync|reconnecting
 ```
 
 Constraints enforced at the boundary: guest name 1–32 chars after control-char strip; ≤12 live WebSocket clients per room (admitted under `Room.mu`); ≤10 live rooms per owner and ≤100 process-wide; suffixing checked against currently-connected names only; a reconnecting guestID keeps its name verbatim. New rooms arm their empty timer immediately, so a never-connected room expires too.
@@ -165,7 +166,7 @@ All JSON. Error body shape everywhere: `{"error": "human-readable message"}`. Au
 
 Pipeline decision tree at `finish` (one worker, `nice -n 19`): probe → **no video stream** ⇒ audio branch: aac/m4a/mp3 → move as-is, else `-c:a aac` into `.m4a`; **video** ⇒ V1 tree unchanged (mp4/h264/aac move; mkv/h264/aac remux; h264+other-audio audio-only transcode; else libx264). `kind` set from the probe. No libx264 path for audio, ever.
 
-### 4.3 Rooms (new surface — replaces V1 `internal/api/rooms.go`)
+### 4.3 Rooms (new surface — replaces V1 DB-backed room handlers)
 
 | Method & path | Req → Resp | Codes | Auth |
 |---|---|---|---|
@@ -203,15 +204,19 @@ JSON frames. Deltas from V1 marked ●.
 | `start` / `end` | `{mediaId}` / `{}` | `start.mediaId` must equal the room's immutable `mediaID`; mismatch is a recoverable `error` with unchanged activity. Room creation already starts the activity; frames remain for restart. |
 | `ping` | `{t}` | every 10 s |
 | ● `status` | `{state:"downloading"\|"file_ready"\|"in_sync"}` | presence-only; never enters the `intent`/`watch.go` path |
+| `leave` | `{}` | deliberate tab leave; only a participant's final live tab pauses active playback |
 
 **Outbound:**
 
 | Type | Payload | Notes |
 |---|---|---|
 | ● `hello` | `{you:{name,isHost,isGuest}, users:[Presence], activity, chat:[ChatMsg], room:{name,kind,mediaId}}` | full stateless recovery on join/reconnect (FR-20); no event replay |
-| ● `presence` | `{users:[{name,isHost,isGuest,status}]}` | server-owned; broadcast on join/leave/status change |
+| ● `presence` | `{users:[{name,isHost,isGuest,status}]}` | server-owned; `reconnecting` remains visible for 10 s after a final socket drop |
+| `user_left` | `{}` | broadcast after an explicit final-tab leave; active playback is paused first |
+| `user_rejoined` | `{}` | broadcast to other clients when a reconnecting participant returns inside the 10 s grace |
+| `left` | `{}` | acknowledgement to the leaving client; sent after server applies the leave before client navigation |
 | ● `chat` | `{name, isGuest, body, createdAt}` | `createdAt` unix **seconds**; neutral `name` replaces V1 `username` |
-| `activity` | `{id,type:"watch",state:{position,rate,paused,updatedAt}}` or `null` | absolute state; clients project via `PositionAt` |
+| `activity` | `{id,type:"watch",state:{position,rate,paused,updatedAt},by?,action?}` or `null` | absolute state; intent broadcasts identify actor/action for toast feedback; clients project via `PositionAt` |
 | `pong` | `{t, serverTime}` | `serverTime` unix **ms** — EMA clock offset in `ws.js`; do not mix with chat seconds |
 | `error` | `{body}` | |
 | ● `room_closed` | `{}` | broadcast at teardown; client renders V1 Room Closed view, then socket closes |
